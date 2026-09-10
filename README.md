@@ -28,8 +28,9 @@ Built 2026-09-11. Electron + xterm.js + node-pty, no bundler, no framework.
 ```
 
 - **Sidebar:** every project with Claude Code activity in the last 48 hours (discovered from `~/.claude/projects`), plus folders you add with **+ Add folder** (pinned; right-click to remove). Green dot: a session is working now. Amber: a session finished its turn and is waiting for you. Badges: live sessions and running workers.
-- **Terminals:** selecting a project opens a PowerShell terminal in its directory. **Launch Claude here** types `claude` into it. **+ Terminal** adds more; each project keeps its terminals alive while you switch around.
+- **Terminals:** selecting a project opens a PowerShell terminal in its directory. **Launch Claude here** starts `claude --session-id <uuid>` in it (a fresh session with a known id). **+ Terminal** adds more; each project keeps its terminals alive while you switch around.
 - **Session tabs:** one per recent Claude session in that project, whether it runs in this app's terminal or in VS Code. They show the orchestrator's prompts, its messages, every tool call and every worker it spawned, live.
+- **Talking to the orchestrator:** when a session runs in one of this app's terminals, its Session tab has a prompt bar at the bottom. Type there and press Enter (Shift+Enter for a new line); the text goes to that terminal's Claude. Sessions started with **Launch Claude here** are linked by id; typing `claude` yourself is matched by start time. A session running elsewhere (VS Code, another console) is read-only here and shows **Take over here**, which opens a terminal and runs `claude --resume <id>`: close it where it runs first. A new session's tab appears after its first prompt, so type the first message in the terminal.
 - **Workers:** one window per subagent of the selected project, appearing the moment it is spawned: role, task, status (running pulses), duration, tool count, tokens, current tool, and a live log of tool calls and messages. Maximize with ⤢, hide with ×, or untick **finished workers** to keep only running ones.
 
 ## Memory view

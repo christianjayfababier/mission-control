@@ -63,7 +63,16 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .pane { position: absolute; inset: 0; display: none; overflow: hidden; }
 .pane.active { display: block; }
 .pane.sess.active { display: flex; flex-direction: column; }
-.pane.sess .wk-body { flex: 1; min-height: 0; height: 100%; overflow-y: auto; }
+.pane.sess .wk-body { flex: 1; min-height: 0; overflow-y: auto; }
+.sess-foot { flex: none; display: grid; grid-template-columns: 1fr auto; column-gap: 8px; row-gap: 4px; align-items: start; padding: 8px 10px; border-top: 1px solid var(--line); background: var(--bg-2); }
+.sess-foot:empty { display: none; }
+.composer { resize: none; width: 100%; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-family: var(--mono); font-size: 12px; line-height: 1.4; }
+.composer:focus { outline: none; border-color: var(--accent); }
+.foot-hint { grid-column: 1 / 3; color: var(--muted); font-size: 11px; }
+.foot-msg { grid-column: 1 / 2; color: var(--muted); line-height: 1.5; align-self: center; }
+.foot-warn { grid-column: 1 / 3; color: var(--amber); font-size: 12px; }
+.foot-warn:empty { display: none; }
+.sess-foot[data-mode="remote"] .btn { grid-column: 2; grid-row: 1; align-self: center; white-space: nowrap; }
 .pane.term { padding: 6px 6px 2px 8px; }
 .pane.term .xterm { height: 100%; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 30px; line-height: 1.6; }

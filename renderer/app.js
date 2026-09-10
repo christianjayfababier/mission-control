@@ -13,6 +13,7 @@ const state = {
   activeTab: new Map(),  // projectKey -> tab id ('pty1' | 'sess:<id>')
   panes: new Map(),      // paneId -> {el, body, lastSeq, kind, id}
   dismissed: new Set(),  // worker ids hidden by user
+  hosts: new Map(),      // sessionId -> ptyId of the terminal running that Claude session (lets the Session tab talk to it)
   maximized: null,
 };
 const termTheme = { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff', selectionBackground: '#264f78', black: '#0d1117', brightBlack: '#6e7681', red: '#ff7b72', green: '#3fb950', yellow: '#d29922', blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4', brightWhite: '#f0f6fc' };
@@ -72,7 +73,7 @@ function renderTabs() {
   const active = state.activeTab.get(p.key);
   for (const t of state.terms.get(p.key) || []) {
     const tab = el('div', 'tab' + (active === t.ptyId ? ' active' : ''));
-    tab.appendChild(el('span', null, t.title));
+    tab.appendChild(el('span', null, t.title + (t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
     const x = el('span', 'x', '×'); x.title = 'Close terminal'; x.onclick = (e) => { e.stopPropagation(); closeTerminal(p.key, t.ptyId); };
     tab.appendChild(x); tab.onclick = () => activateTab(t.ptyId); tabs.appendChild(tab);
   }
@@ -83,6 +84,7 @@ function renderTabs() {
     tab.title = `${s.status} · ${s.model || ''} · ${s.toolCount} tools · ${fmtTok(s.outTokens)} out`;
     tab.onclick = () => activateTab(id); tabs.appendChild(tab);
   });
+  matchHosts(p); refreshSessionFooters(p);
 }
 function activateTab(id) {
   const p = currentProject(); if (!p) return;
@@ -112,21 +114,98 @@ async function newTerminal(p) {
   term.open(container); fit.fit();
   const ptyId = await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
-  const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}` };
+  const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
-  term.onData((d) => window.mc.ptyWrite(ptyId, d));
+  term.onData((d) => { window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); });
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
   activateTab(ptyId);
   return rec;
 }
 function closeTerminal(key, ptyId) {
   const list = state.terms.get(key) || []; const i = list.findIndex((t) => t.ptyId === ptyId); if (i < 0) return;
-  const t = list[i]; window.mc.ptyKill(ptyId); t.term.dispose(); t.el.remove(); list.splice(i, 1);
+  const t = list[i]; window.mc.ptyKill(ptyId); t.term.dispose(); t.el.remove(); list.splice(i, 1); unhost(t);
   if (state.activeTab.get(key) === ptyId) state.activeTab.set(key, firstTabId(key));
   activateTab(state.activeTab.get(key));
 }
 window.mc.onPtyData(({ id, data }) => { for (const list of state.terms.values()) for (const t of list) if (t.ptyId === id) t.term.write(data); });
-window.mc.onPtyExit(({ id, exitCode }) => { for (const list of state.terms.values()) for (const t of list) if (t.ptyId === id) t.term.write(`\r\n\x1b[90m[process exited with code ${exitCode}] — close this tab or press + Terminal\x1b[0m\r\n`); });
+window.mc.onPtyExit(({ id, exitCode }) => { for (const list of state.terms.values()) for (const t of list) if (t.ptyId === id) { t.term.write(`\r\n\x1b[90m[process exited with code ${exitCode}] — close this tab or press + Terminal\x1b[0m\r\n`); unhost(t); } });
+
+// ───────────── talking to the orchestrator
+// A Session tab can only send input to a Claude session that runs inside one of this app's terminals.
+// launchClaude() pins the session id (claude --session-id / --resume) so the link is exact; typing `claude` by hand
+// is matched by start time instead (trackTyped + matchHosts).
+function trackTyped(rec, d) {
+  for (const ch of d) {
+    if (ch === '\r' || ch === '\n') {
+      const line = rec.typed.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[^\x20-\x7e]/g, '').trim(); rec.typed = '';
+      if (/^\/(exit|quit)$/i.test(line) && (rec.sessionId || rec.claudeAt)) { unhost(rec); renderTabs(); continue; } // Claude left; the shell is back
+      if (!/(^|\s)claude(\s|$)/.test(line)) continue;
+      const m = /--session-id\s+([0-9a-f-]{36})|(?:--resume|-r)\s+([0-9a-f-]{36})/i.exec(line);
+      rec.claudeAt = Date.now(); rec.sessionId = m ? (m[1] || m[2]).toLowerCase() : null;
+      if (rec.sessionId) state.hosts.set(rec.sessionId, rec.ptyId);
+      renderTabs();
+    } else if (ch === '\x7f' || ch === '\b') rec.typed = rec.typed.slice(0, -1);
+    else if (rec.typed.length < 2000) rec.typed += ch;
+  }
+}
+function unhost(rec) { rec.sessionId = null; rec.claudeAt = 0; for (const [sid, pid] of state.hosts) if (pid === rec.ptyId) state.hosts.delete(sid); }
+function hostOf(sid) { const pid = state.hosts.get(sid); if (!pid) return null; for (const list of state.terms.values()) for (const t of list) if (t.ptyId === pid) return t; state.hosts.delete(sid); return null; }
+function matchHosts(p) {
+  for (const t of state.terms.get(p.key) || []) {
+    if (t.sessionId || !t.claudeAt) continue;
+    const cands = p.sessions.filter((s) => s.startedAt >= t.claudeAt - 5000 && !state.hosts.has(s.id)).sort((a, b) => a.startedAt - b.startedAt);
+    if (cands[0]) { t.sessionId = cands[0].id; state.hosts.set(t.sessionId, t.ptyId); }
+  }
+}
+async function launchClaude(p, opts = {}) {
+  if (!state.env.ptyAvailable) { alert('Terminals are unavailable: ' + (state.env.ptyError || 'node-pty failed to load')); return null; }
+  const list = state.terms.get(p.key) || [];
+  let t = list.find((x) => x.ptyId === state.activeTab.get(p.key)) || list[0];
+  if (!t || t.sessionId || t.claudeAt) t = await newTerminal(p); // never type into a terminal that already runs Claude
+  if (!t) return null;
+  const sid = (opts.resume || crypto.randomUUID()).toLowerCase();
+  t.sessionId = sid; t.claudeAt = Date.now(); state.hosts.set(sid, t.ptyId);
+  activateTab(t.ptyId);
+  window.mc.ptyWrite(t.ptyId, (opts.resume ? `claude --resume ${sid}` : `claude --session-id ${sid}`) + '\r');
+  return t;
+}
+function sendToSession(sid, text) {
+  const t = hostOf(sid); if (!t) return false;
+  const body = text.replace(/\r\n?/g, '\n');
+  window.mc.ptyWrite(t.ptyId, body.includes('\n') ? '\x1b[200~' + body + '\x1b[201~' : body); // bracketed paste keeps newlines from submitting early
+  setTimeout(() => window.mc.ptyWrite(t.ptyId, '\r'), 120);
+  return true;
+}
+function refreshSessionFooters(p) {
+  for (const s of p.sessions) {
+    const pane = state.panes.get('session:' + s.id); if (!pane || !pane.foot) continue;
+    const host = hostOf(s.id);
+    const mode = host ? 'host' : 'remote';
+    if (pane.foot.dataset.mode !== mode) {
+      pane.foot.dataset.mode = mode; pane.foot.innerHTML = '';
+      if (host) {
+        const ta = el('textarea', 'composer'); ta.placeholder = 'Message the orchestrator… (Enter to send, Shift+Enter for a new line)'; ta.rows = 2;
+        const send = () => { const v = ta.value.trim(); if (!v) return; if (sendToSession(s.id, v)) { ta.value = ''; ta.rows = 2; } else renderTabs(); };
+        ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
+        ta.oninput = () => { ta.rows = Math.min(8, Math.max(2, ta.value.split('\n').length)); };
+        const btn = el('button', 'btn primary', 'Send'); btn.onclick = send;
+        const hint = el('div', 'foot-hint');
+        pane.foot.appendChild(ta); pane.foot.appendChild(btn); pane.foot.appendChild(hint);
+      } else {
+        const msg = el('div', 'foot-msg'); const warn = el('div', 'foot-warn');
+        const btn = el('button', 'btn', 'Take over here'); btn.title = 'Open a terminal in this project and run claude --resume for this session';
+        btn.onclick = () => launchClaude(p, { resume: s.id });
+        pane.foot.appendChild(msg); pane.foot.appendChild(warn); pane.foot.appendChild(btn);
+      }
+    }
+    if (host) pane.foot.querySelector('.foot-hint').textContent = `→ ${host.title}`;
+    else {
+      pane.foot.querySelector('.foot-msg').textContent = 'This session runs outside Mission Control (VS Code or another terminal). Reply there, or resume it in a terminal here:';
+      const active = s.status === 'working' || s.status === 'live';
+      pane.foot.querySelector('.foot-warn').textContent = active ? 'It is active right now. Close it where it runs first, otherwise two copies will write to the same transcript.' : '';
+    }
+  }
+}
 
 // ───────────── transcript panes (session monitors + worker windows)
 function ensurePane(kind, id, parent, cls) {
@@ -134,10 +213,12 @@ function ensurePane(kind, id, parent, cls) {
   let pane = state.panes.get(paneId);
   if (pane) { if (pane.el.parentElement !== parent) parent.appendChild(pane.el); return pane; }
   const wrap = el('div', cls || 'pane');
-  const body = el('div', kind === 'worker' ? 'wk-body' : 'wk-body');
+  const body = el('div', 'wk-body');
   wrap.appendChild(body);
+  let foot = null;
+  if (kind === 'session') { foot = el('div', 'sess-foot'); wrap.appendChild(foot); }
   parent.appendChild(wrap);
-  pane = { el: wrap, body, lastSeq: 0, kind, id };
+  pane = { el: wrap, body, foot, lastSeq: 0, kind, id };
   state.panes.set(paneId, pane);
   window.mc.lines(kind, id, 0).then((lines) => appendLines(pane, lines));
   return pane;
@@ -196,12 +277,7 @@ function renderWorkers() {
 // ───────────── header actions
 $('#btn-add').onclick = () => window.mc.addProject();
 $('#btn-term').onclick = () => { const p = currentProject(); if (p) newTerminal(p); };
-$('#btn-claude').onclick = async () => {
-  const p = currentProject(); if (!p) return;
-  let list = state.terms.get(p.key) || []; let t = list.find((x) => x.ptyId === state.activeTab.get(p.key)) || list[0];
-  if (!t) t = await newTerminal(p);
-  if (t) { activateTab(t.ptyId); window.mc.ptyWrite(t.ptyId, 'claude\r'); }
-};
+$('#btn-claude').onclick = () => { const p = currentProject(); if (p) launchClaude(p); };
 $('#btn-code').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openInCode(p.path); };
 $('#btn-folder').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openFolder(p.path); };
 $('#chk-all').onchange = (e) => { state.showIdle = e.target.checked; renderSidebar(); };
