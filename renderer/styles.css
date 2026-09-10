@@ -73,6 +73,19 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .foot-warn { grid-column: 1 / 3; color: var(--amber); font-size: 12px; }
 .foot-warn:empty { display: none; }
 .sess-foot[data-mode="remote"] .btn { grid-column: 2; grid-row: 1; align-self: center; white-space: nowrap; }
+/* Orchestrator tab launcher */
+.pane.lead.active { display: block; overflow-y: auto; }
+.lead-card { max-width: 980px; margin: 18px auto; padding: 0 20px; display: flex; flex-direction: column; gap: 12px; }
+.lead-card h2 { margin: 0; font-size: 17px; }
+.lead-sub { margin: 0; color: var(--muted); line-height: 1.55; }
+.lead-warn { margin: 0; color: var(--amber); line-height: 1.5; }
+.lead-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lead-select { background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; max-width: 520px; }
+.lead-cp { border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); overflow: hidden; }
+.lead-cp-title { padding: 6px 10px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+.lead-cp-body { margin: 0; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto; color: #c9d4e0; }
+.lead-foot { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.lead-foot a { color: var(--accent); font-family: var(--mono); }
 .pane.term { padding: 6px 6px 2px 8px; }
 .pane.term .xterm { height: 100%; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 30px; line-height: 1.6; }

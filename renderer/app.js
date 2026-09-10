@@ -14,8 +14,12 @@ const state = {
   panes: new Map(),      // paneId -> {el, body, lastSeq, kind, id}
   dismissed: new Set(),  // worker ids hidden by user
   hosts: new Map(),      // sessionId -> ptyId of the terminal running that Claude session (lets the Session tab talk to it)
+  lead: new Map(),       // projectKey -> sessionId of the project's orchestrator (lead) session; persisted in localStorage
+  leadPanes: new Map(),  // projectKey -> launcher pane element shown on the Orchestrator tab when no lead session is running here
   maximized: null,
 };
+try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem('mc.lead') || '{}'))) state.lead.set(k, v); } catch { /* fresh */ }
+function saveLead() { try { localStorage.setItem('mc.lead', JSON.stringify(Object.fromEntries(state.lead))); } catch { /* ignore */ } }
 const termTheme = { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff', selectionBackground: '#264f78', black: '#0d1117', brightBlack: '#6e7681', red: '#ff7b72', green: '#3fb950', yellow: '#d29922', blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4', brightWhite: '#f0f6fc' };
 
 // ───────────── sidebar
@@ -60,24 +64,33 @@ function selectProject(key) {
   // show this project's panes, hide the others
   for (const [k, list] of state.terms) for (const t of list) t.el.classList.toggle('active', false);
   renderTabs();
-  if (p && p.path && !state.terms.has(key) && state.env.ptyAvailable) newTerminal(p);
+  if (p && p.path && !state.terms.has(key) && state.env.ptyAvailable) newTerminal(p, { activate: false });
   activateTab(state.activeTab.get(key) || firstTabId(key));
   renderWorkers();
 }
-function firstTabId(key) { const t = state.terms.get(key); if (t && t[0]) return t[0].ptyId; const p = currentProject(); return p && p.sessions[0] ? 'sess:' + p.sessions[0].id : null; }
+function firstTabId(key) { const p = currentProject(); return p ? 'lead' : null; }
 
 // ───────────── tabs: terminals + session monitors
 function renderTabs() {
   const tabs = $('#orch-tabs'); tabs.innerHTML = '';
   const p = currentProject(); if (!p) return;
   const active = state.activeTab.get(p.key);
+  // Orchestrator (lead) tab first: the one place to command this project's lead session
+  const leadSid = state.lead.get(p.key) || null;
+  const leadSess = leadSid ? p.sessions.find((s) => s.id === leadSid) : null;
+  const leadHost = leadSid ? hostOf(leadSid) : null;
+  const lt = el('div', 'tab lead' + (active === 'lead' ? ' active' : ''));
+  lt.appendChild(el('span', 'st ' + (leadSess ? leadSess.status : leadHost ? 'live' : '')));
+  lt.appendChild(el('span', null, 'Orchestrator'));
+  lt.title = leadSess ? `${leadSess.status} · ${leadSess.title}` : 'Start or resume the lead session for this project';
+  lt.onclick = () => activateTab('lead'); tabs.appendChild(lt);
   for (const t of state.terms.get(p.key) || []) {
     const tab = el('div', 'tab' + (active === t.ptyId ? ' active' : ''));
-    tab.appendChild(el('span', null, t.title + (t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
+    tab.appendChild(el('span', null, t.title + (t.lead ? ' ▸ orchestrator' : t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
     const x = el('span', 'x', '×'); x.title = 'Close terminal'; x.onclick = (e) => { e.stopPropagation(); closeTerminal(p.key, t.ptyId); };
     tab.appendChild(x); tab.onclick = () => activateTab(t.ptyId); tabs.appendChild(tab);
   }
-  p.sessions.slice(0, 6).forEach((s, i) => {
+  p.sessions.filter((s) => s.id !== leadSid).slice(0, 6).forEach((s, i) => {
     const id = 'sess:' + s.id;
     const tab = el('div', 'tab' + (active === id ? ' active' : ''));
     tab.appendChild(el('span', 'st ' + s.status)); tab.appendChild(el('span', null, `Session ${i + 1}: ${s.title.slice(0, 40)}`));
@@ -92,7 +105,12 @@ function activateTab(id) {
   $('#orch-empty').style.display = id ? 'none' : 'flex';
   for (const pane of $('#orch-body').querySelectorAll('.pane')) pane.classList.remove('active');
   if (!id) { renderTabs(); return; }
-  if (id.startsWith('sess:')) {
+  if (id === 'lead') {
+    const sid = state.lead.get(p.key);
+    const hosted = sid && hostOf(sid) && p.sessions.some((s) => s.id === sid);
+    if (hosted) { const pane = ensurePane('session', sid, $('#orch-body'), 'pane sess'); pane.el.classList.add('active'); }
+    else { renderLeadPane(p).classList.add('active'); }
+  } else if (id.startsWith('sess:')) {
     const sid = id.slice(5);
     const pane = ensurePane('session', sid, $('#orch-body'), 'pane sess');
     pane.el.classList.add('active');
@@ -104,7 +122,7 @@ function activateTab(id) {
 }
 
 // ───────────── terminals
-async function newTerminal(p) {
+async function newTerminal(p, { activate = true } = {}) {
   if (!state.env.ptyAvailable) { alert('Terminals are unavailable: ' + (state.env.ptyError || 'node-pty failed to load')); return; }
   if (!state.terms.has(p.key)) state.terms.set(p.key, []); // claim the slot synchronously so a racing snapshot does not open a second terminal
   const container = el('div', 'pane term');
@@ -118,7 +136,7 @@ async function newTerminal(p) {
   list.push(rec); state.terms.set(p.key, list);
   term.onData((d) => { window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); });
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
-  activateTab(ptyId);
+  if (activate) activateTab(ptyId); else renderTabs();
   return rec;
 }
 function closeTerminal(key, ptyId) {
@@ -127,6 +145,7 @@ function closeTerminal(key, ptyId) {
   if (state.activeTab.get(key) === ptyId) state.activeTab.set(key, firstTabId(key));
   activateTab(state.activeTab.get(key));
 }
+function unhost(rec) { rec.sessionId = null; rec.claudeAt = 0; rec.lead = false; for (const [sid, pid] of state.hosts) if (pid === rec.ptyId) state.hosts.delete(sid); }
 window.mc.onPtyData(({ id, data }) => { for (const list of state.terms.values()) for (const t of list) if (t.ptyId === id) t.term.write(data); });
 window.mc.onPtyExit(({ id, exitCode }) => { for (const list of state.terms.values()) for (const t of list) if (t.ptyId === id) { t.term.write(`\r\n\x1b[90m[process exited with code ${exitCode}] — close this tab or press + Terminal\x1b[0m\r\n`); unhost(t); } });
 
@@ -148,7 +167,6 @@ function trackTyped(rec, d) {
     else if (rec.typed.length < 2000) rec.typed += ch;
   }
 }
-function unhost(rec) { rec.sessionId = null; rec.claudeAt = 0; for (const [sid, pid] of state.hosts) if (pid === rec.ptyId) state.hosts.delete(sid); }
 function hostOf(sid) { const pid = state.hosts.get(sid); if (!pid) return null; for (const list of state.terms.values()) for (const t of list) if (t.ptyId === pid) return t; state.hosts.delete(sid); return null; }
 function matchHosts(p) {
   for (const t of state.terms.get(p.key) || []) {
@@ -164,10 +182,70 @@ async function launchClaude(p, opts = {}) {
   if (!t || t.sessionId || t.claudeAt) t = await newTerminal(p); // never type into a terminal that already runs Claude
   if (!t) return null;
   const sid = (opts.resume || crypto.randomUUID()).toLowerCase();
-  t.sessionId = sid; t.claudeAt = Date.now(); state.hosts.set(sid, t.ptyId);
-  activateTab(t.ptyId);
-  window.mc.ptyWrite(t.ptyId, (opts.resume ? `claude --resume ${sid}` : `claude --session-id ${sid}`) + '\r');
+  t.sessionId = sid; t.claudeAt = Date.now(); t.lead = !!opts.lead; state.hosts.set(sid, t.ptyId);
+  if (!opts.stay) activateTab(t.ptyId);
+  const q = (s) => '"' + String(s).replace(/["`$]/g, '') + '"'; // PowerShell double-quoted argument; strip what it would interpret
+  let cmd = opts.resume ? `claude --resume ${sid}` : `claude --session-id ${sid}`;
+  if (opts.systemPromptFile) cmd += ` --append-system-prompt-file ${q(opts.systemPromptFile)}`;
+  if (opts.prompt) cmd += ' ' + q(opts.prompt); // positional prompt: the first message, sent as soon as Claude is up
+  window.mc.ptyWrite(t.ptyId, cmd + '\r');
   return t;
+}
+
+// ───────────── Orchestrator (lead) tab
+// One lead session per project. Started with the Mission Control orchestrator rules appended to its system prompt and
+// a standup as its first message, so it reads memory (incl. the automatic checkpoint), the project's rules and plan,
+// maps the repo through a worker if needed, reports where things stand, and waits for orders.
+const STANDUP_NEW = 'Start of day in Mission Control. Run the standup from your orchestrator rules: memory and checkpoint first, then project rules and plan, repo map via a worker if needed. Report where the project stands and what you propose next, then wait for my instructions.';
+const STANDUP_RESUME = 'Resumed in Mission Control. Re-read the checkpoint and memory, tell me briefly where we are and what is unfinished, then wait for my instructions.';
+async function launchLead(p, opts = {}) {
+  const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: state.env.kitFile, prompt: opts.resume ? STANDUP_RESUME : STANDUP_NEW });
+  if (!t) return;
+  state.lead.set(p.key, t.sessionId); saveLead();
+  activateTab('lead');
+}
+function renderLeadPane(p) {
+  let pane = state.leadPanes.get(p.key);
+  if (!pane) { pane = el('div', 'pane lead'); $('#orch-body').appendChild(pane); state.leadPanes.set(p.key, pane); }
+  const sid = state.lead.get(p.key) || null;
+  const host = sid ? hostOf(sid) : null;
+  const sess = sid ? p.sessions.find((s) => s.id === sid) : null;
+  const mode = host && !sess ? 'starting' : sess && !host ? 'remote' : 'idle';
+  const key = mode + ':' + (sid || '') + ':' + (sess ? sess.status : '');
+  if (pane.dataset.key === key) return pane;
+  pane.dataset.key = key; pane.innerHTML = '';
+  const card = el('div', 'lead-card'); pane.appendChild(card);
+  card.appendChild(el('h2', null, `Orchestrator — ${p.name}`));
+  if (mode === 'starting') {
+    card.appendChild(el('p', 'lead-sub', `Starting the lead session in ${host.title} and briefing it. This tab switches to the conversation as soon as it answers.`));
+    const b = el('button', 'btn', `Watch ${host.title}`); b.onclick = () => activateTab(host.ptyId); card.appendChild(b);
+    return pane;
+  }
+  card.appendChild(el('p', 'lead-sub', 'The lead session for this project. It starts with a standup: memory and the automatic checkpoint, the project’s rules, plan and board, a repo map from a worker when needed. Then it reports where things stand and takes your instructions, planning first and leading the workers.'));
+  if (mode === 'remote') {
+    card.appendChild(el('p', 'lead-warn', `Your lead session (${sess.title.slice(0, 60)}) is running outside Mission Control${sess.status === 'working' || sess.status === 'live' ? ' and is active right now. Close it there first, then' : '.'} take it over here to continue with the full conversation.`));
+  }
+  const row = el('div', 'lead-actions');
+  const bNew = el('button', 'btn primary', 'Start a new day'); bNew.title = 'New session with the orchestrator rules; runs the standup first'; bNew.onclick = () => launchLead(p); row.appendChild(bNew);
+  const recent = p.sessions.slice(0, 8);
+  if (recent.length) {
+    const sel = el('select', 'lead-select');
+    for (const s of recent) { const o = el('option', null, `${s.id === sid ? '★ ' : ''}${fmtAgo(Date.now() - s.lastActivity)} ago · ${s.title.slice(0, 70)}`); o.value = s.id; if (s.id === sid) o.selected = true; sel.appendChild(o); }
+    const bRes = el('button', 'btn', 'Resume selected'); bRes.title = 'Continue that conversation here with its full history'; bRes.onclick = () => launchLead(p, { resume: sel.value });
+    row.appendChild(sel); row.appendChild(bRes);
+  }
+  card.appendChild(row);
+  const cp = el('div', 'lead-cp'); cp.appendChild(el('div', 'lead-cp-title', 'Latest checkpoint (auto-written to memory)')); const pre = el('pre', 'lead-cp-body', 'Loading…'); cp.appendChild(pre); card.appendChild(cp);
+  window.mc.readMemory({ path: p.path, slug: p.slug }).then((m) => {
+    const note = (m.notes || []).find((n) => n.name === 'mission-control-checkpoint');
+    pre.textContent = note ? note.body.trim().split('\n').slice(0, 40).join('\n') : 'No checkpoint yet. Mission Control writes one after the first turn of any session in this project.';
+  }).catch(() => { pre.textContent = 'Could not read memory.'; });
+  const foot = el('div', 'lead-foot');
+  foot.appendChild(el('span', null, 'Rules the lead follows: '));
+  const a = el('a', null, state.env.kitFile || 'orchestrator-system.md'); a.href = '#'; a.onclick = (e) => { e.preventDefault(); if (state.env.kitFile) window.mc.openPath(state.env.kitFile); };
+  foot.appendChild(a); foot.appendChild(el('span', null, ' · project-specific rules win: CLAUDE.md, docs/ORCHESTRATOR.md, /standup, .claude/agents'));
+  card.appendChild(foot);
+  return pane;
 }
 function sendToSession(sid, text) {
   const t = hostOf(sid); if (!t) return false;
@@ -297,7 +375,12 @@ window.mc.onEnv((env) => { state.env = env;
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar();
   const p = currentProject();
-  if (p) { $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderTabs(); renderWorkers(); if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key)); if (p.path && !state.terms.has(p.key) && state.env.ptyAvailable) newTerminal(p); }
+  if (p) {
+    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderTabs(); renderWorkers();
+    if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key));
+    else if (state.activeTab.get(p.key) === 'lead') activateTab('lead'); // swaps launcher → conversation once the lead session's transcript appears
+    if (p.path && !state.terms.has(p.key) && state.env.ptyAvailable) newTerminal(p, { activate: false });
+  }
 });
 setInterval(() => { renderWorkers(); }, 1000);
 window.mc.snapshot().then((snap) => { state.snapshot = snap; renderSidebar(); if (state.selected) selectProject(state.selected); });

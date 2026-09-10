@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 const { TranscriptWatcher } = require('./transcripts');
+const { CheckpointWriter } = require('./checkpoint');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -20,6 +21,13 @@ const START_VIEW = (() => { const i = process.argv.indexOf('--view'); return i >
 const REGISTRY = path.join(DATA_DIR, 'projects.json');
 const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
+// Orchestrator rules: appended to the lead session's system prompt (claude --append-system-prompt-file).
+// The default ships in ./kit; the copy under DATA_DIR is the one that is used, so the owner can edit it.
+const KIT_FILE = path.join(DATA_DIR, 'orchestrator-system.md');
+function ensureKit() {
+  try { if (!fs.existsSync(KIT_FILE)) { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.copyFileSync(path.join(__dirname, 'kit', 'orchestrator-system.md'), KIT_FILE); } }
+  catch (e) { console.error('kit', e && e.message); }
+}
 
 function readJson(f, d) { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } }
 function writeJson(f, v) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(v, null, 2)); }
@@ -44,7 +52,7 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE });
     sendSnapshot();
     if (SCREENSHOT) setTimeout(async () => {
       try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.resolve(SCREENSHOT), img.toPNG()); console.log('screenshot written', path.resolve(SCREENSHOT)); }
@@ -140,6 +148,7 @@ ipcMain.on('pty:resize', (_e, { id, cols, rows }) => { const p = ptys.get(id); i
 ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); } });
 
 function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); }
-app.whenReady().then(() => { watcher.start(); createWindow(); });
-app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); app.quit(); });
+const checkpoints = new CheckpointWriter(watcher, { projRoot: PROJ_DIR_ROOT });
+app.whenReady().then(() => { ensureKit(); watcher.start(); checkpoints.start(); createWindow(); });
+app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });
