@@ -24,6 +24,7 @@ const START_VIEW = (() => { const i = process.argv.indexOf('--view'); return i >
 const REGISTRY = path.join(DATA_DIR, 'projects.json');
 const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
+const SCREENSHOT_WAIT = (() => { const i = process.argv.indexOf('--wait'); return i >= 0 ? Number(process.argv[i + 1]) || 4500 : 4500; })();
 // Orchestrator rules: appended to the lead session's system prompt (claude --append-system-prompt-file).
 // The default ships in ./kit; the copy under DATA_DIR is the one that is used, so the owner can edit it.
 const KIT_DIR = path.join(__dirname, 'kit');
@@ -44,7 +45,6 @@ const github = new GitHub();
 const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
 const boards = new Boards(path.join(DATA_DIR, 'boards'));
 const BOARD_SCRIPT = path.join(DATA_DIR, 'mc-board.js');
-const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json') });
 const gitCache = new Map(); // project key -> { remote, branch, at }
 const prCache = new Map();  // project key -> { prs, error, at }
 /** The account for a project: the chosen one, else the login embedded in the remote URL (https://login@github.com/...) if gh knows it. */
@@ -60,6 +60,12 @@ function writeJson(f, v) { fs.mkdirSync(path.dirname(f), { recursive: true }); f
 
 let win = null;
 const watcher = new TranscriptWatcher({ hours: 48 });
+// memory: checkpoint (current state) + journal (history) per project, fed by transcripts and by everything below
+const checkpoints = new CheckpointWriter(watcher, {
+  projRoot: PROJ_DIR_ROOT,
+  context: (p) => { const k = keyOf(p); const s = settings.get(p); const g = gitCache.get(k); const pr = prCache.get(k); const repo = parseRepo(s.repo || (g && g.remote)); return { board: boards.load(p), notes: notes.forProject(p), inflight: repo ? prwatch.inflight(repo.full) : [], repo, account: (pr && pr.account) || s.ghAccount || null, branch: g && g.branch, settings: s }; },
+});
+const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json'), onNote: (p, text) => checkpoints.journal(p, `PR watch · ${text}`) });
 const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
 
@@ -121,7 +127,7 @@ function createWindow() {
       try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.resolve(SCREENSHOT), img.toPNG()); console.log('screenshot written', path.resolve(SCREENSHOT)); }
       catch (e) { console.error('screenshot failed', e); }
       killAllPtys(); watcher.stop(); app.exit(0);
-    }, 4500);
+    }, SCREENSHOT_WAIT);
   });
 }
 
@@ -135,12 +141,22 @@ setInterval(sendSnapshot, 5000); // statuses age even without new lines
 ipcMain.handle('snapshot', () => snapshot());
 setInterval(() => refreshIntegrations(false), 15000);
 setInterval(() => { if (notes.poll()) sendSnapshot(); }, 1500);
-setInterval(() => { const changed = boards.poll(); if (changed.length && win && !win.isDestroyed()) { for (const b of changed) win.webContents.send('board', b); sendSnapshot(); } }, 2000);
+const boardSeen = new Map(); // project key -> { tickets: Map id->status, todos: Map id->done } to journal changes made by mc-board.js
+function journalBoardDiff(b) {
+  const k = keyOf(b.project); const prev = boardSeen.get(k);
+  const cur = { tickets: new Map(b.tickets.map((t) => [t.id, t.status])), todos: new Map(b.todos.map((t) => [t.id, !!t.done])) };
+  if (prev) {
+    for (const t of b.tickets) { const was = prev.tickets.get(t.id); if (was === undefined) checkpoints.journal(b.project, `board · ticket added ${t.id} [${t.status}] ${t.title}${t.risk ? ' · risk ' + t.risk : ''}`); else if (was !== t.status) checkpoints.journal(b.project, `board · ${t.id} ${was} → ${t.status}: ${t.title}${t.pr ? ' · ' + t.pr : ''}`); }
+    for (const t of b.todos) { const was = prev.todos.get(t.id); if (was === undefined) checkpoints.journal(b.project, `board · todo added ${t.id} ${t.text} (${t.owner})`); else if (was !== !!t.done) checkpoints.journal(b.project, `board · todo ${t.id} ${t.done ? 'done' : 'reopened'}: ${t.text}`); }
+  }
+  boardSeen.set(k, cur);
+}
+setInterval(() => { const changed = boards.poll(); if (changed.length) { for (const b of changed) journalBoardDiff(b); if (win && !win.isDestroyed()) { for (const b of changed) win.webContents.send('board', b); sendSnapshot(); } } }, 2000);
 
 // ── tickets & todos board
 ipcMain.handle('board:get', (_e, p) => boards.load(p));
-ipcMain.handle('board:add', (_e, { path: p, kind, items }) => kind === 'todo' ? boards.addTodos(p, items, 'owner') : boards.addTickets(p, items, 'owner'));
-ipcMain.handle('board:patch', (_e, { path: p, kind, id, patch }) => boards.patch(p, kind, id, patch));
+ipcMain.handle('board:add', (_e, { path: p, kind, items }) => { checkpoints.journal(p, `board · owner added ${items.length} ${kind}${items.length === 1 ? '' : 's'}: ${items.map((i) => typeof i === 'string' ? i : i.title).join('; ').slice(0, 200)}`); return kind === 'todo' ? boards.addTodos(p, items, 'owner') : boards.addTickets(p, items, 'owner'); });
+ipcMain.handle('board:patch', (_e, { path: p, kind, id, patch }) => { const b = boards.patch(p, kind, id, patch); const it = (kind === 'todo' ? b.todos : b.tickets).find((x) => x.id === id); if (it && (patch.status || patch.done !== undefined)) checkpoints.journal(p, `board · owner marked ${id} ${patch.status || (patch.done ? 'done' : 'reopened')}: ${it.title || it.text}`); return b; });
 ipcMain.handle('board:remove', (_e, { path: p, kind, id }) => boards.remove(p, kind, id));
 
 // ── repo, GitHub account, git identity per project
@@ -159,8 +175,12 @@ ipcMain.handle('notes:answer', (_e, { id, answer }) => {
   const ts = new Date().toISOString();
   notes.append({ kind: 'answer', id, ts, answer: String(answer || '').slice(0, 4000), by: 'owner' });
   notes.append({ kind: 'dismiss', id, ts });
+  checkpoints.journal(n.project, `inbox · owner answered ${n.type} "${n.title}" → ${answer}`);
   sendSnapshot(); return { ...n, answer };
 });
+// the orchestrator's own notes reach the journal when they appear in notes.jsonl
+let journaledNotes = new Set();
+setInterval(() => { for (const n of notes.open()) { if (journaledNotes.has(n.id)) continue; journaledNotes.add(n.id); if (n.source !== 'mission-control') checkpoints.journal(n.project, `inbox · orchestrator posted ${n.type} "${n.title}"`, new Date(n.ts).getTime()); } if (journaledNotes.size > 5000) journaledNotes = new Set([...journaledNotes].slice(-2000)); }, 3000);
 ipcMain.handle('notes:dismiss', (_e, { id }) => { if (notes.get(id)) { notes.append({ kind: 'dismiss', id, ts: new Date().toISOString() }); sendSnapshot(); } return true; });
 
 // ── lead launch: rules + the owner's additions + this project's context, in one file for --append-system-prompt-file
@@ -275,7 +295,6 @@ ipcMain.on('pty:resize', (_e, { id, cols, rows }) => { const p = ptys.get(id); i
 ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); } });
 
 function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); }
-const checkpoints = new CheckpointWriter(watcher, { projRoot: PROJ_DIR_ROOT });
 app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); setTimeout(() => refreshIntegrations(true), 1500); });
 app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });

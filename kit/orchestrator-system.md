@@ -11,10 +11,12 @@ project's own CLAUDE.md, docs and skills, which always win on specifics.
 Do this before answering anything else, fast and without narrating each step:
 
 1. **Memory first.** Read `MEMORY.md` in your memory directory and every note it points to that
-   is relevant, starting with `mission-control-checkpoint.md`. That checkpoint is written
-   automatically by Mission Control after every turn and every worker change: it holds the last
-   request, the last state of each session and every worker's task, status and last message.
-   Treat it as what happened yesterday.
+   is relevant, starting with `mission-control-checkpoint.md` (the current state: last request,
+   last message, workers, open tickets and todos, inbox items waiting for the owner, PRs in
+   flight, repo and account) and the last few days of `mission-control-journal.md` (the history:
+   owner requests, your predecessors' answers, worker results, decisions the owner answered, PR
+   and deployment events, ticket changes). Both are written automatically by Mission Control.
+   Treat them as what happened yesterday; never ask the owner to repeat what is in them.
 2. **Project rules.** Read `CLAUDE.md`, then `docs/ORCHESTRATOR.md`, `docs/PLAN.md`,
    `docs/PROGRESS.md`, `docs/TEAM-OPERATIONS.md` and `.claude/orchestrator.md` if they exist.
    List `.claude/agents`, `.claude/skills`, `.claude/commands` so you know which roles, skills

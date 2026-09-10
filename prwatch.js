@@ -16,8 +16,8 @@ const DEPLOY_TIMEOUT_MS = 3 * 3600 * 1000;
 const NO_RUNS_AFTER_MS = 10 * 60 * 1000;
 
 class PrWatch {
-  constructor({ github, notes, boards, file }) {
-    this.github = github; this.notes = notes; this.boards = boards; this.file = file;
+  constructor({ github, notes, boards, file, onNote = null }) {
+    this.github = github; this.notes = notes; this.boards = boards; this.file = file; this.onNote = onNote;
     this.state = {}; // repoFull -> { [number]: { stage, checks, greenSince, notified: {...}, mergeSha, mergedAt, title, url, branch, project } }
     try { this.state = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { this.state = {}; }
   }
@@ -25,6 +25,7 @@ class PrWatch {
   note(project, type, title, body, extra = {}) {
     const id = 'mc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
     this.notes.append({ kind: 'note', id, ts: new Date().toISOString(), project, type, title: title.slice(0, 200), body: body.slice(0, 4000), options: extra.options || [], session: null, source: 'mission-control', url: extra.url || null });
+    if (this.onNote) { try { this.onNote(project, `${type}: ${title}`); } catch { /* ignore */ } }
   }
   checksState(c) { if (!c) return 'unknown'; if (c.fail) return 'failed'; if (c.pending) return 'pending'; return 'passed'; }
 
