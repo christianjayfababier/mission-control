@@ -14,6 +14,7 @@
    node mc-board.js todo add "text" [--owner orchestrator|worker|owner]
    node mc-board.js todo done D-002
    node mc-board.js todo remove D-002
+   node mc-board.js watch add <pr number|url> [--ticket T-003]   # Mission Control follows the PR: checks → merge reminder → merge → deployment, into the owner's inbox
 
  Board file: ~/.claude/mission-control/boards/<project-key>.json (project = --project <path> or the current
  directory). Mission Control shows changes within two seconds. Exit code is always 0.
@@ -63,6 +64,14 @@ try {
     else if (cmd === 'done') { const t = b.todos.find((x) => x.id === a1); if (t) { t.done = true; t.doneAt = now(); save(b); console.log('done ' + t.id); } else console.log('not found'); }
     else if (cmd === 'remove') { const i = b.todos.findIndex((x) => x.id === a1); if (i >= 0) { b.todos.splice(i, 1); save(b); console.log('removed ' + a1); } else console.log('not found'); }
     else console.log('usage: todo list|add|done|remove');
-  } else console.log('usage: mc-board.js ticket ... | todo ...   (see header of this file)');
+  } else if (kind === 'watch') {
+    // node mc-board.js watch add <pr number or url> [--ticket T-003]   — Mission Control then reports checks, merge and deployment to the owner's inbox
+    b.watches = b.watches || [];
+    const num = a2 ? Number((String(a2).match(/(\d+)\s*$/) || [])[1]) : NaN;
+    if (cmd === 'add' && num) { if (!b.watches.some((w) => w.pr === num)) b.watches.push({ pr: num, ticket: flags.ticket || null, since: now() }); save(b); console.log(`watching PR #${num}: Mission Control will post checks, merge and deployment updates to the owner's inbox`); }
+    else if (cmd === 'remove' && num) { b.watches = b.watches.filter((w) => w.pr !== num); save(b); console.log('removed watch for PR #' + num); }
+    else if (cmd === 'list') console.log(b.watches.length ? b.watches.map((w) => `PR #${w.pr}${w.ticket ? ' (' + w.ticket + ')' : ''} since ${w.since}`).join('\n') : 'no watches');
+    else console.log('usage: watch add <pr number|url> [--ticket T-003] | watch remove <pr> | watch list');
+  } else console.log('usage: mc-board.js ticket ... | todo ... | watch ...   (see header of this file)');
 } catch (e) { console.log('mc-board: ' + (e && e.message)); }
 process.exit(0);

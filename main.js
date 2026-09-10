@@ -13,6 +13,7 @@ const { TranscriptWatcher } = require('./transcripts');
 const { CheckpointWriter } = require('./checkpoint');
 const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
 const { Boards } = require('./boards');
+const { PrWatch } = require('./prwatch');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -43,6 +44,7 @@ const github = new GitHub();
 const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
 const boards = new Boards(path.join(DATA_DIR, 'boards'));
 const BOARD_SCRIPT = path.join(DATA_DIR, 'mc-board.js');
+const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json') });
 const gitCache = new Map(); // project key -> { remote, branch, at }
 const prCache = new Map();  // project key -> { prs, error, at }
 /** The account for a project: the chosen one, else the login embedded in the remote URL (https://login@github.com/...) if gh knows it. */
@@ -69,6 +71,7 @@ function enrich(snap) {
     p.settings = { ...s, account: (pr && pr.account) || s.ghAccount || null }; p.branch = g ? g.branch : null; p.remote = g ? g.remote : null;
     p.repo = parseRepo(s.repo || (g && g.remote));
     p.prs = pr ? pr.prs : []; p.prsError = pr ? pr.error || null : null; p.prsAt = pr ? pr.at : 0;
+    p.inflight = p.repo ? prwatch.inflight(p.repo.full) : [];
     p.notes = notes.forProject(p.path);
     p.boardCounts = boards.counts(p.path);
   }
@@ -90,7 +93,10 @@ async function refreshIntegrations(force) {
       const s = settings.get(p.path); const repo = parseRepo(s.repo || (gitCache.get(k) || {}).remote);
       if (!repo) { if (prCache.delete(k)) changed = true; continue; }
       const pr = prCache.get(k);
-      if (force || !pr || now - pr.at > 60000) { const account = await effectiveAccount(s, (gitCache.get(k) || {}).remote); const r = await github.prList(repo.full, account); prCache.set(k, { ...r, account, at: Date.now() }); changed = true; }
+      if (force || !pr || now - pr.at > 60000) {
+        const account = await effectiveAccount(s, (gitCache.get(k) || {}).remote); const r = await github.prList(repo.full, account); prCache.set(k, { ...r, account, at: Date.now() }); changed = true;
+        if (!r.error) { try { await prwatch.tick({ project: p.path, repo, account, prs: r.prs, workers: p.workers }); } catch (e) { console.error('prwatch', e && e.message); } }
+      }
     }
     if (changed) sendSnapshot();
   } catch (e) { console.error('integrations', e && e.message); }

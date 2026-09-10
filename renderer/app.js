@@ -398,6 +398,16 @@ function renderHeader(p) {
   if (p.branch) r.appendChild(el('span', null, 'on ' + p.branch));
   const s = p.settings || {};
   r.appendChild(el('span', 'acct', s.ghAccount ? `commits as ${s.ghAccount}${s.gitName ? ' · ' + s.gitName : ''}` : s.account ? `GitHub as ${s.account} (from the remote URL)` : 'GitHub as machine default'));
+  // team status: busy while workers run or the team's PRs are not yet live
+  const inflight = p.inflight || []; const opening = inflight.filter((x) => x.stage === 'open'), deploying = inflight.filter((x) => x.stage === 'merged');
+  const busy = p.running > 0 || inflight.length > 0;
+  const parts = [];
+  if (p.running) parts.push(`${p.running} worker${p.running === 1 ? '' : 's'} running`);
+  if (opening.length) parts.push(`${opening.length} PR${opening.length === 1 ? '' : 's'} awaiting merge`);
+  if (deploying.length) parts.push(`${deploying.length} deploying`);
+  const team = el('span', 'team ' + (busy ? 'busy' : 'free'), busy ? 'Team busy: ' + parts.join(' · ') : 'Team free');
+  team.title = busy ? 'Wait for the current work to be merged and live before giving a new task, or ask the orchestrator to queue it.' : 'No workers running and no PRs in flight.';
+  r.appendChild(team);
 }
 function renderPrStrip(p) {
   const strip = $('#pr-strip'); strip.innerHTML = '';
@@ -452,8 +462,11 @@ function renderInbox(snap) {
     if (card) continue; // cards are static once rendered; answers remove them
     card = el('div', 'note ' + n.type); card.dataset.id = n.id;
     const top = el('div', 'note-top'); top.appendChild(el('span', 'note-type', n.type)); top.appendChild(el('span', null, n.projectName)); top.appendChild(el('span', null, '· ' + fmtAgo(Date.now() - new Date(n.ts).getTime()) + ' ago'));
+    top.appendChild(el('span', 'note-src', n.source === 'mission-control' ? '· PR watch' : '· orchestrator'));
     card.appendChild(top);
-    card.appendChild(el('div', 'note-title', n.title));
+    const title = el('div', 'note-title', n.title);
+    if (n.url) { title.classList.add('link'); title.title = n.url; title.onclick = () => window.mc.openUrl(n.url); }
+    card.appendChild(title);
     if (n.body) { const b = el('div', 'note-body', n.body); b.title = 'Click to expand'; b.onclick = () => b.classList.toggle('open'); card.appendChild(b); }
     const opts = el('div', 'note-opts');
     const options = n.options && n.options.length ? n.options : n.type === 'decision' ? ['Approve', 'Reject'] : [];

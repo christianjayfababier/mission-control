@@ -92,6 +92,11 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .ph-repo a { color: var(--accent); cursor: pointer; text-decoration: none; }
 .ph-repo a:hover { text-decoration: underline; }
 .ph-repo .acct { background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; }
+.ph-repo .team { border-radius: 999px; padding: 0 8px; font-weight: 600; }
+.ph-repo .team.free { background: #12301c; color: var(--green); }
+.ph-repo .team.busy { background: #3a2a10; color: var(--amber); }
+.note-src { margin-left: auto; }
+.note-title.link { cursor: pointer; } .note-title.link:hover { color: var(--accent); }
 
 /* ── pull requests strip above the workers */
 .pr-strip { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); overflow-x: auto; background: var(--bg-2); flex: none; }

@@ -14,8 +14,8 @@ const pad = (n) => String(n).padStart(3, '0');
 class Boards {
   constructor(dir) { this.dir = dir; this.mtimes = new Map(); }
   file(p) { return path.join(this.dir, safeKey(p) + '.json'); }
-  empty(p) { return { version: 1, project: String(p), tickets: [], todos: [], seq: { ticket: 0, todo: 0 } }; }
-  load(p) { try { const b = JSON.parse(fs.readFileSync(this.file(p), 'utf8')); b.tickets = b.tickets || []; b.todos = b.todos || []; b.seq = b.seq || { ticket: b.tickets.length, todo: b.todos.length }; return b; } catch { return this.empty(p); } }
+  empty(p) { return { version: 1, project: String(p), tickets: [], todos: [], watches: [], seq: { ticket: 0, todo: 0 } }; }
+  load(p) { try { const b = JSON.parse(fs.readFileSync(this.file(p), 'utf8')); b.tickets = b.tickets || []; b.todos = b.todos || []; b.watches = b.watches || []; b.seq = b.seq || { ticket: b.tickets.length, todo: b.todos.length }; return b; } catch { return this.empty(p); } }
   save(p, b) { fs.mkdirSync(this.dir, { recursive: true }); b.updatedAt = now(); const f = this.file(p); fs.writeFileSync(f, JSON.stringify(b, null, 2)); try { this.mtimes.set(f, fs.statSync(f).mtimeMs); } catch { /* ignore */ } return b; }
   addTickets(p, items, source = 'owner') {
     const b = this.load(p);

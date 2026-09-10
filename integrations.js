@@ -72,6 +72,34 @@ class GitHub {
   }
 }
 
+GitHub.prototype.prView = async function (repoFull, number, login) {
+  const t = await this.token(login); const env = t ? { GH_TOKEN: t } : {};
+  const r = await run('gh', ['pr', 'view', String(number), '--repo', repoFull, '--json', 'number,title,state,url,headRefName,baseRefName,mergedAt,mergeCommit,author,isDraft,reviewDecision,statusCheckRollup'], { env, timeout: 30000 });
+  if (!r.ok) return null;
+  try { const p = JSON.parse(r.stdout); return { number: p.number, title: p.title, state: p.state, url: p.url, branch: p.headRefName, base: p.baseRefName, mergedAt: p.mergedAt || null, mergeSha: p.mergeCommit && p.mergeCommit.oid || null, author: p.author && p.author.login, draft: !!p.isDraft, review: p.reviewDecision || '', checks: summarizeChecks(p.statusCheckRollup) }; } catch { return null; }
+};
+/** Workflow runs triggered by a commit (the merge commit after a PR lands): CI/CD and deploy pipelines. */
+GitHub.prototype.runsForCommit = async function (repoFull, sha, login) {
+  const t = await this.token(login); const env = t ? { GH_TOKEN: t } : {};
+  const r = await run('gh', ['run', 'list', '--repo', repoFull, '--commit', sha, '--limit', '20', '--json', 'name,status,conclusion,url,event,workflowName'], { env, timeout: 30000 });
+  if (!r.ok) return null;
+  try { return JSON.parse(r.stdout).map((x) => ({ name: x.workflowName || x.name, status: x.status, conclusion: x.conclusion || '', url: x.url, event: x.event })); } catch { return null; }
+};
+/** GitHub Deployments for a commit, with their latest status (production environments show up here when the repo uses them). */
+GitHub.prototype.deploymentsForCommit = async function (repoFull, sha, login) {
+  const t = await this.token(login); const env = t ? { GH_TOKEN: t } : {};
+  const r = await run('gh', ['api', `repos/${repoFull}/deployments?sha=${sha}&per_page=10`], { env, timeout: 30000 });
+  if (!r.ok) return [];
+  let list = []; try { list = JSON.parse(r.stdout); } catch { return []; }
+  const out = [];
+  for (const d of list.slice(0, 5)) {
+    const s = await run('gh', ['api', `repos/${repoFull}/deployments/${d.id}/statuses?per_page=1`], { env, timeout: 20000 });
+    let state = 'pending'; try { const st = JSON.parse(s.stdout); if (st[0]) state = st[0].state; } catch { /* keep pending */ }
+    out.push({ id: d.id, environment: d.environment, state, url: d.url && d.url.replace('api.github.com/repos', 'github.com').replace(/\/deployments\/\d+$/, '/deployments') });
+  }
+  return out;
+};
+
 async function gitInfo(dir) {
   const [r1, r2] = await Promise.all([run('git', ['-C', dir, 'remote', 'get-url', 'origin']), run('git', ['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'])]);
   return { remote: r1.ok ? r1.stdout.trim() : null, branch: r2.ok ? r2.stdout.trim() : null, at: Date.now() };

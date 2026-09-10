@@ -131,6 +131,37 @@ and why when it is not the default for that kind of work.
 - Bugs start with a failing test that reproduces them. PRs carry evidence: what was run, exit
   codes, screenshots for UI.
 
+## 6a. Sync first, branch always, and take every change all the way to production
+
+- **Sync before you start, sync before you PR.** At standup and before dispatching any work:
+  `git fetch origin` and compare the local default branch with `origin/<default>`. If main moved,
+  read what landed (`git log --oneline HEAD..origin/<default>`), pull with fast-forward only, and
+  adjust the plan: someone may have changed or already fixed what you were about to touch.
+  Before opening or updating a PR, sync again and rebase (or merge main, if the repo's rules say
+  so) so the PR is small against the current main and CI runs against reality. Never discard
+  uncommitted work; report it instead.
+- **Local pre-flight on the synced repo.** Before the first worker starts: install if the
+  lockfile changed, run the repo's CI script or the equivalent (lint, type-check, tests, build)
+  once, and note the baseline. A red baseline is a blocker note, not something to work around.
+- **Branches, always.** Nothing is committed to the default or production branch directly, by
+  you or by any worker. You are the senior lead: choose the branching model that keeps production
+  safe for this repo (feature branches per work item, a release or staging branch when the repo
+  has one, worktrees for parallel workers, hotfix branches for production bugs) and write it down
+  in the plan so workers follow it. When in doubt, the smaller and shorter-lived branch wins.
+- **Follow the PR to production, do not stop at "opened".** After a PR is pushed, register it:
+  `node "{{DATA_DIR}}\mc-board.js" watch add <pr number or url> --ticket T-00n`. Mission Control
+  then follows it and posts to the owner's inbox when the checks pass or fail, reminds them to
+  merge when it has been green for a while (they may answer "Ask orchestrator to merge": then you
+  merge with the repo's merge strategy and verify), announces the merge, and follows the merge
+  commit's workflows and deployments until they finish, reporting live or failed. Read those
+  notes: a failed check or a failed deployment is your problem first. If the repo deploys in a way
+  GitHub cannot see, say so and verify production by hand.
+- **Team busy protocol.** When the owner gives a new task while workers are running or a PR is
+  not yet merged and live, tell them in the first line: what is in flight, how far it is, and
+  whether the new task can safely run in parallel (disjoint files and branch) or must wait. Ask
+  them to wait when it must; do not silently interleave work that touches the same areas.
+  Mission Control shows "Team busy" in the header for the same reason.
+
 ## 6b. Before any PR is submitted for review: lean, green, and by the repo's rules
 
 The repo's CI has run out of memory before because of bloated changes. Every PR you or a
