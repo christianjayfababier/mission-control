@@ -79,7 +79,8 @@ class CheckpointWriter {
           const sm = w.summary(s);
           const status = sm.status.toUpperCase();
           const time = dur((sm.status === 'running' ? Date.now() : sm.lastTs) - sm.startTs);
-          out.push(`- [${status} · ${time} · ${sm.toolCount} tools] **${sm.role}** — ${one(sm.task, 160) || '(no description)'}`);
+          const model = (sm.model || '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
+          out.push(`- [${status} · ${time} · ${sm.toolCount} tools${model ? ' · ' + model : ''}${sm.gitBranch ? ' · branch ' + sm.gitBranch : ''}] **${sm.role}** — ${one(sm.task, 160) || '(no description)'}`);
           if (sm.status === 'running' && sm.lastTool) out.push(`  - now: ${one(sm.lastTool, 160)}`);
           if (sm.lastText) out.push(`  - last message: ${one(sm.lastText, 400)}`);
         }

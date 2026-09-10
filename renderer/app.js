@@ -48,7 +48,8 @@ function renderSidebar() {
   }
   const all = state.snapshot.projects || [];
   const live = all.reduce((a, p) => a + p.live, 0), run = all.reduce((a, p) => a + p.running, 0), wait = all.reduce((a, p) => a + p.waiting, 0);
-  $('#totals').innerHTML = `<b>${live}</b> live · <b>${run}</b> workers running · <b>${wait}</b> waiting for you`;
+  const notes = state.snapshot.openNotes || 0;
+  $('#totals').innerHTML = `<b>${live}</b> live · <b>${run}</b> workers running · <b>${wait}</b> waiting for you${notes ? ` · <b>${notes}</b> in your inbox` : ''}`;
 }
 
 // ───────────── project selection / header
@@ -61,6 +62,7 @@ function selectProject(key) {
   renderSidebar();
   $('#ph-name').textContent = p ? p.name : 'Select a project';
   $('#ph-path').textContent = p ? (p.path || '') : '';
+  renderHeader(p); renderPrStrip(p);
   // show this project's panes, hide the others
   for (const [k, list] of state.terms) for (const t of list) t.el.classList.toggle('active', false);
   renderTabs();
@@ -199,7 +201,9 @@ async function launchClaude(p, opts = {}) {
 const STANDUP_NEW = 'Start of day in Mission Control. Run the standup from your orchestrator rules: memory and checkpoint first, then project rules and plan, repo map via a worker if needed. Report where the project stands and what you propose next, then wait for my instructions.';
 const STANDUP_RESUME = 'Resumed in Mission Control. Re-read the checkpoint and memory, tell me briefly where we are and what is unfinished, then wait for my instructions.';
 async function launchLead(p, opts = {}) {
-  const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: state.env.kitFile, prompt: opts.resume ? STANDUP_RESUME : STANDUP_NEW });
+  let sys = state.env.kitFile;
+  try { sys = (await window.mc.leadPrepare(p.path)) || sys; } catch { /* fall back to the plain rules file */ }
+  const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: sys, prompt: opts.resume ? STANDUP_RESUME : STANDUP_NEW });
   if (!t) return;
   state.lead.set(p.key, t.sessionId); saveLead();
   activateTab('lead');
@@ -345,7 +349,15 @@ function renderWorkers() {
       card.querySelector('.wk-role').textContent = w.role;
       card.querySelector('.wk-task').textContent = w.task || '(no description)'; card.querySelector('.wk-task').title = w.task || '';
       const dur = fmtAgo((w.status === 'running' ? Date.now() : w.lastTs) - w.startTs);
-      card.querySelector('.wk-meta').textContent = `${w.status.toUpperCase()} · ${dur} · ${w.toolCount} tools · ${fmtTok(w.outTokens)} out${w.status === 'running' && w.lastTool ? ' · now: ' + w.lastTool.slice(0, 40) : ''}`;
+      const meta = card.querySelector('.wk-meta');
+      const sig = `${w.status}|${dur}|${w.toolCount}|${w.outTokens}|${w.model}|${w.gitBranch}|${p.branch}|${w.lastTool}|${(p.prs || []).length}`;
+      if (meta.dataset.sig !== sig) {
+        meta.dataset.sig = sig; meta.textContent = `${w.status.toUpperCase()} · ${dur} · ${modelShort(w.model)} · ${w.toolCount} tools · ${fmtTok(w.outTokens)} out`;
+        if (w.gitBranch && w.gitBranch !== p.branch) { meta.append(' · ⎇ '); const b = el('span', 'branch', w.gitBranch); meta.appendChild(b); }
+        const pr = w.gitBranch ? (p.prs || []).find((x) => x.branch === w.gitBranch) : null;
+        if (pr) { meta.append(' · '); const a = el('a', 'pr-link', `PR #${pr.number}`); a.title = pr.title; a.onclick = () => window.mc.openUrl(pr.url); meta.appendChild(a); }
+        if (w.status === 'running' && w.lastTool) meta.append(' · now: ' + w.lastTool.slice(0, 40));
+      }
     }
   }
   for (const card of [...grid.children]) if (!wanted.has('wk:' + card.dataset.id)) card.remove();
@@ -361,6 +373,104 @@ $('#btn-folder').onclick = () => { const p = currentProject(); if (p && p.path) 
 $('#chk-all').onchange = (e) => { state.showIdle = e.target.checked; renderSidebar(); };
 $('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; renderWorkers(); };
 
+// ───────────── repo, account, pull requests
+function modelShort(m) { m = String(m || ''); return /fable/i.test(m) ? 'fable' : /opus/i.test(m) ? 'opus' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : m ? m.replace(/^claude-/, '').slice(0, 14) : '?'; }
+function renderHeader(p) {
+  const r = $('#ph-repo'); r.innerHTML = ''; if (!p || !p.path) return;
+  if (p.repo) { const a = el('a', null, '⎇ ' + p.repo.full); a.title = p.repo.url; a.onclick = () => window.mc.openUrl(p.repo.url); r.appendChild(a); }
+  else r.appendChild(el('span', null, p.remote ? 'remote: ' + p.remote : 'no GitHub remote'));
+  if (p.branch) r.appendChild(el('span', null, 'on ' + p.branch));
+  const s = p.settings || {};
+  r.appendChild(el('span', 'acct', s.ghAccount ? `commits as ${s.ghAccount}${s.gitName ? ' · ' + s.gitName : ''}` : s.account ? `GitHub as ${s.account} (from the remote URL)` : 'GitHub as machine default'));
+}
+function renderPrStrip(p) {
+  const strip = $('#pr-strip'); strip.innerHTML = '';
+  const show = p && p.repo && ((p.prs && p.prs.length) || p.prsError);
+  strip.hidden = !show; if (!show) return;
+  if (p.prsError) strip.appendChild(el('span', 'pr-chip err', 'PRs: ' + p.prsError));
+  for (const pr of p.prs || []) {
+    const chip = el('span', 'pr-chip' + (pr.draft ? ' draft' : '')); chip.title = `${pr.title}\n${pr.url}\nby ${pr.author || '?'} · ${pr.review || 'no review yet'}`;
+    chip.appendChild(el('span', 'n', `#${pr.number}`)); chip.appendChild(el('span', null, pr.title.slice(0, 48) + (pr.draft ? ' (draft)' : '')));
+    chip.appendChild(el('span', 'b', pr.branch));
+    const c = pr.checks || { pass: 0, fail: 0, pending: 0 };
+    if (c.fail) chip.appendChild(el('span', 'ck fail', `✗ ${c.fail}`)); if (c.pending) chip.appendChild(el('span', 'ck pending', `⏳ ${c.pending}`)); if (c.pass) chip.appendChild(el('span', 'ck pass', `✓ ${c.pass}`));
+    if (pr.review === 'APPROVED') chip.appendChild(el('span', 'ck pass', 'approved')); else if (pr.review === 'CHANGES_REQUESTED') chip.appendChild(el('span', 'ck fail', 'changes requested'));
+    const who = (p.workers || []).filter((w) => w.gitBranch === pr.branch).map((w) => w.role + (w.status === 'running' ? ' ●' : ''));
+    if (who.length) chip.appendChild(el('span', 'who', who.join(', ')));
+    chip.onclick = () => window.mc.openUrl(pr.url); strip.appendChild(chip);
+  }
+}
+// settings dialog
+(() => {
+  const dlg = $('#dlg-repo'); if (!dlg) return;
+  $('#btn-repo').onclick = async () => {
+    const p = currentProject(); if (!p || !p.path) return;
+    $('#dlg-repo-project').textContent = `${p.name} — ${p.path}`;
+    const s = p.settings || {};
+    $('#f-repo').value = s.repo || (p.repo ? p.repo.url : '') || ''; $('#f-name').value = s.gitName || ''; $('#f-email').value = s.gitEmail || '';
+    const sel = $('#f-account'); sel.innerHTML = '<option value="">Machine default (active gh account)</option>';
+    try { for (const a of await window.mc.ghAccounts()) { const o = el('option', null, a.login + (a.active ? ' (active on this machine)' : '')); o.value = a.login; sel.appendChild(o); } } catch { /* gh missing */ }
+    sel.value = s.ghAccount || '';
+    dlg.dataset.path = p.path; dlg.showModal();
+  };
+  $('#f-account').onchange = () => { $('#f-name').value = ''; $('#f-email').value = ''; }; // let the account fill them in
+  $('#f-cancel').onclick = () => dlg.close();
+  $('#frm-repo').onsubmit = async (e) => {
+    e.preventDefault();
+    const patch = { repo: $('#f-repo').value.trim(), ghAccount: $('#f-account').value, gitName: $('#f-name').value.trim(), gitEmail: $('#f-email').value.trim() };
+    if (!patch.ghAccount) { patch.gitName = patch.gitName || ''; patch.gitEmail = patch.gitEmail || ''; }
+    await window.mc.settingsSet(dlg.dataset.path, patch); dlg.close();
+  };
+})();
+
+// ───────────── inbox: notes, questions and decisions from the orchestrators
+function renderInbox(snap) {
+  const box = $('#inbox'); const all = [];
+  for (const p of snap.projects || []) for (const n of p.notes || []) all.push({ ...n, projectName: p.name, projectKey: p.key });
+  all.sort((a, b) => b.ts.localeCompare(a.ts));
+  $('#inbox-count').textContent = all.length ? String(all.length) : '';
+  const seen = new Set();
+  for (const n of all) {
+    seen.add(n.id);
+    let card = box.querySelector(`[data-id="${n.id}"]`);
+    if (card) continue; // cards are static once rendered; answers remove them
+    card = el('div', 'note ' + n.type); card.dataset.id = n.id;
+    const top = el('div', 'note-top'); top.appendChild(el('span', 'note-type', n.type)); top.appendChild(el('span', null, n.projectName)); top.appendChild(el('span', null, '· ' + fmtAgo(Date.now() - new Date(n.ts).getTime()) + ' ago'));
+    card.appendChild(top);
+    card.appendChild(el('div', 'note-title', n.title));
+    if (n.body) { const b = el('div', 'note-body', n.body); b.title = 'Click to expand'; b.onclick = () => b.classList.toggle('open'); card.appendChild(b); }
+    const opts = el('div', 'note-opts');
+    const options = n.options && n.options.length ? n.options : n.type === 'decision' ? ['Approve', 'Reject'] : [];
+    for (const o of options) { const b = el('button', 'btn small' + (o === options[0] && n.type === 'decision' ? ' primary' : ''), o); b.onclick = () => answerNote(n, o); opts.appendChild(b); }
+    if (n.type === 'announcement') { const d = el('button', 'btn small', 'Dismiss'); d.onclick = () => window.mc.notesDismiss(n.id); opts.appendChild(d); }
+    else { const d = el('button', 'btn small', 'Dismiss'); d.title = 'Remove without answering'; d.onclick = () => window.mc.notesDismiss(n.id); opts.appendChild(d); }
+    card.appendChild(opts);
+    if (n.type !== 'announcement') {
+      const row = el('div', 'note-reply'); const ta = el('textarea'); ta.rows = 1; ta.placeholder = 'Reply or add a comment… (Enter to send)';
+      ta.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (ta.value.trim()) answerNote(n, ta.value.trim()); } };
+      ta.oninput = () => { ta.rows = Math.min(5, Math.max(1, ta.value.split('\n').length)); };
+      const send = el('button', 'btn small', 'Send'); send.onclick = () => { if (ta.value.trim()) answerNote(n, ta.value.trim()); };
+      row.appendChild(ta); row.appendChild(send); card.appendChild(row);
+    }
+    box.prepend(card);
+  }
+  for (const card of [...box.children]) if (!seen.has(card.dataset.id)) card.remove();
+}
+async function answerNote(n, answer) {
+  await window.mc.notesAnswer(n.id, answer);
+  // deliver into the orchestrator's conversation when it runs here: the note's own session, else the project's lead, else any hosted session of the project
+  const p = (state.snapshot.projects || []).find((x) => x.key === n.projectKey);
+  let host = n.session ? hostOf(n.session) : null;
+  if (!host && p) { const lead = state.lead.get(p.key); if (lead) host = hostOf(lead); }
+  if (!host && p) for (const t of state.terms.get(p.key) || []) if (t.sessionId && hostOf(t.sessionId)) { host = t; break; }
+  const label = n.type === 'decision' ? 'Decision' : n.type === 'question' ? 'Answer' : 'Reply';
+  const msg = `${label} on "${n.title}": ${answer}`;
+  const st = $('#inbox-status');
+  if (host) { sendToSession(host.sessionId, msg); st.textContent = `sent to ${host.title}`; }
+  else st.textContent = 'saved · orchestrator reads it with mc-note answers';
+  setTimeout(() => { st.textContent = ''; }, 6000);
+}
+
 // splitter drag
 (() => {
   const sp = $('#splitter'); let dragging = false;
@@ -373,10 +483,10 @@ $('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; re
 window.mc.onEnv((env) => { state.env = env;
   if (env.startView === 'session') setTimeout(() => { const p = currentProject(); if (p && p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
-  state.snapshot = snap; renderSidebar();
+  state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
   if (p) {
-    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderTabs(); renderWorkers();
+    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs(); renderWorkers();
     if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key));
     else if (state.activeTab.get(p.key) === 'lead') activateTab('lead'); // swaps launcher → conversation once the lead session's transcript appears
     if (p.path && !state.terms.has(p.key) && state.env.ptyAvailable) newTerminal(p, { activate: false });

@@ -11,6 +11,7 @@ const os = require('os');
 const { spawn } = require('child_process');
 const { TranscriptWatcher } = require('./transcripts');
 const { CheckpointWriter } = require('./checkpoint');
+const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -23,10 +24,29 @@ const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
 // Orchestrator rules: appended to the lead session's system prompt (claude --append-system-prompt-file).
 // The default ships in ./kit; the copy under DATA_DIR is the one that is used, so the owner can edit it.
-const KIT_FILE = path.join(DATA_DIR, 'orchestrator-system.md');
+const KIT_DIR = path.join(__dirname, 'kit');
+const KIT_FILE = path.join(DATA_DIR, 'orchestrator-system.md');         // shipped rules, refreshed at every start ({{DATA_DIR}} filled in)
+const KIT_LOCAL = path.join(DATA_DIR, 'orchestrator-system.local.md');  // the owner's additions, never overwritten
+const NOTE_SCRIPT = path.join(DATA_DIR, 'mc-note.js');                  // the orchestrator's line to the inbox
 function ensureKit() {
-  try { if (!fs.existsSync(KIT_FILE)) { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.copyFileSync(path.join(__dirname, 'kit', 'orchestrator-system.md'), KIT_FILE); } }
-  catch (e) { console.error('kit', e && e.message); }
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(KIT_FILE, fs.readFileSync(path.join(KIT_DIR, 'orchestrator-system.md'), 'utf8').split('{{DATA_DIR}}').join(DATA_DIR));
+    fs.copyFileSync(path.join(KIT_DIR, 'mc-note.js'), NOTE_SCRIPT);
+    if (!fs.existsSync(KIT_LOCAL)) fs.writeFileSync(KIT_LOCAL, '# Your additions to the orchestrator rules\n\nEverything below is appended to every lead session\'s system prompt after the Mission Control rules. Edit freely; Mission Control never overwrites this file.\n');
+  } catch (e) { console.error('kit', e && e.message); }
+}
+const settings = new Settings(path.join(DATA_DIR, 'project-settings.json'));
+const github = new GitHub();
+const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
+const gitCache = new Map(); // project key -> { remote, branch, at }
+const prCache = new Map();  // project key -> { prs, error, at }
+/** The account for a project: the chosen one, else the login embedded in the remote URL (https://login@github.com/...) if gh knows it. */
+async function effectiveAccount(s, remote) {
+  if (s.ghAccount) return s.ghAccount;
+  const m = /\/\/([^@/:]+)@github\.com/i.exec(remote || ''); if (!m) return null;
+  const known = (await github.listAccounts(false)).find((a) => a.login.toLowerCase() === m[1].toLowerCase());
+  return known ? known.login : null;
 }
 
 function readJson(f, d) { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } }
@@ -38,7 +58,39 @@ const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
 
 function registry() { const r = readJson(REGISTRY, []); return Array.isArray(r) ? r : []; }
-function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', watcher.snapshot(registry())); }
+function enrich(snap) {
+  for (const p of snap.projects) {
+    if (!p.path) { p.notes = []; continue; }
+    const k = keyOf(p.path); const s = settings.get(p.path); const g = gitCache.get(k); const pr = prCache.get(k);
+    p.settings = { ...s, account: (pr && pr.account) || s.ghAccount || null }; p.branch = g ? g.branch : null; p.remote = g ? g.remote : null;
+    p.repo = parseRepo(s.repo || (g && g.remote));
+    p.prs = pr ? pr.prs : []; p.prsError = pr ? pr.error || null : null; p.prsAt = pr ? pr.at : 0;
+    p.notes = notes.forProject(p.path);
+  }
+  snap.openNotes = notes.open().length;
+  return snap;
+}
+function snapshot() { return enrich(watcher.snapshot(registry())); }
+function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', snapshot()); }
+// git remotes/branches and open PRs for projects that matter right now (active in the last 12 h or pinned)
+let refreshing = false;
+async function refreshIntegrations(force) {
+  if (refreshing) return; refreshing = true;
+  try {
+    const snap = watcher.snapshot(registry()); const now = Date.now(); let changed = false;
+    for (const p of snap.projects) {
+      if (!p.path || !(p.pinned || now - p.lastActivity < 12 * 3600 * 1000)) continue;
+      const k = keyOf(p.path); const g = gitCache.get(k);
+      if (force || !g || now - g.at > 30000) { gitCache.set(k, await gitInfo(p.path)); changed = true; }
+      const s = settings.get(p.path); const repo = parseRepo(s.repo || (gitCache.get(k) || {}).remote);
+      if (!repo) { if (prCache.delete(k)) changed = true; continue; }
+      const pr = prCache.get(k);
+      if (force || !pr || now - pr.at > 60000) { const account = await effectiveAccount(s, (gitCache.get(k) || {}).remote); const r = await github.prList(repo.full, account); prCache.set(k, { ...r, account, at: Date.now() }); changed = true; }
+    }
+    if (changed) sendSnapshot();
+  } catch (e) { console.error('integrations', e && e.message); }
+  finally { refreshing = false; }
+}
 
 function createWindow() {
   const st = readJson(WINSTATE, {});
@@ -52,7 +104,7 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT });
     sendSnapshot();
     if (SCREENSHOT) setTimeout(async () => {
       try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.resolve(SCREENSHOT), img.toPNG()); console.log('screenshot written', path.resolve(SCREENSHOT)); }
@@ -69,7 +121,54 @@ watcher.on('lines', (payload) => { if (win && !win.isDestroyed()) win.webContent
 watcher.on('error', (e) => console.error('watcher', e));
 setInterval(sendSnapshot, 5000); // statuses age even without new lines
 
-ipcMain.handle('snapshot', () => watcher.snapshot(registry()));
+ipcMain.handle('snapshot', () => snapshot());
+setInterval(() => refreshIntegrations(false), 15000);
+setInterval(() => { if (notes.poll()) sendSnapshot(); }, 1500);
+
+// ── repo, GitHub account, git identity per project
+ipcMain.handle('gh:accounts', () => github.listAccounts(true));
+ipcMain.handle('settings:get', (_e, p) => settings.get(p));
+ipcMain.handle('settings:set', async (_e, { path: p, patch }) => {
+  const cur = settings.get(p); const next = { ...patch };
+  if (next.ghAccount && (next.ghAccount !== cur.ghAccount || !cur.gitName) && !next.gitName) { const u = await github.user(next.ghAccount); if (u) { next.gitName = next.gitName || u.name; next.gitEmail = next.gitEmail || u.email; } }
+  const saved = settings.set(p, next); refreshIntegrations(true); return saved;
+});
+ipcMain.handle('open:url', (_e, u) => { if (/^https:\/\//i.test(String(u))) shell.openExternal(String(u)); return true; });
+
+// ── inbox: the owner answers or dismisses the orchestrator's notes
+ipcMain.handle('notes:answer', (_e, { id, answer }) => {
+  const n = notes.get(id); if (!n) return null;
+  const ts = new Date().toISOString();
+  notes.append({ kind: 'answer', id, ts, answer: String(answer || '').slice(0, 4000), by: 'owner' });
+  notes.append({ kind: 'dismiss', id, ts });
+  sendSnapshot(); return { ...n, answer };
+});
+ipcMain.handle('notes:dismiss', (_e, { id }) => { if (notes.get(id)) { notes.append({ kind: 'dismiss', id, ts: new Date().toISOString() }); sendSnapshot(); } return true; });
+
+// ── lead launch: rules + the owner's additions + this project's context, in one file for --append-system-prompt-file
+ipcMain.handle('lead:prepare', async (_e, p) => {
+  const k = keyOf(p); const s = settings.get(p);
+  const g = gitCache.get(k) || await gitInfo(p); gitCache.set(k, g);
+  const repo = parseRepo(s.repo || g.remote);
+  const account = await effectiveAccount(s, g.remote);
+  if (account && !s.ghAccount) { const u = await github.user(account); if (u) Object.assign(s, { ghAccount: account, gitName: s.gitName || u.name, gitEmail: s.gitEmail || u.email, inferred: true }); }
+  const base = fs.readFileSync(KIT_FILE, 'utf8');
+  let local = ''; try { local = fs.readFileSync(KIT_LOCAL, 'utf8'); } catch { local = ''; }
+  const ctx = [
+    '', '', '# This project (filled in by Mission Control at launch)', '',
+    `- Name: ${path.basename(p)} · path: ${p}`,
+    repo ? `- GitHub repository: ${repo.full} (${repo.url}). Current branch: ${g.branch || '?'}.` : '- No GitHub remote is configured for this project. Do not create one on your own; post a decision note first.',
+    s.ghAccount
+      ? `- GitHub account for this project: "${s.ghAccount}"${s.inferred ? ' (taken from the remote URL; the owner can change it in Mission Control)' : ''}, git identity ${s.gitName || s.ghAccount} <${s.gitEmail || ''}>. Its token is in this terminal's environment (GH_TOKEN${s.inferred ? '' : ', GIT_AUTHOR_* and GIT_COMMITTER_*'}), so gh and git push act as that account. Never run "gh auth switch" and never change git config user.* globally; other projects use other accounts at the same time.`
+      : '- No GitHub account was chosen for this project in Mission Control, so the machine default applies. Before the first push or PR, post a decision note asking which account to use.',
+    `- Inbox script: node "${NOTE_SCRIPT}" (see the Inbox section of your rules). Mission Control's owner reads that inbox.`,
+    '',
+  ].join('\n');
+  const dir = path.join(DATA_DIR, 'generated'); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, k.replace(/[^a-z0-9]+/gi, '-') + '.md');
+  fs.writeFileSync(file, base.trimEnd() + '\n\n' + local.trim() + ctx);
+  return file;
+});
 ipcMain.handle('lines', (_e, { kind, id, afterSeq }) => watcher.lines(kind, id, afterSeq || 0));
 
 // ── project registry
@@ -131,13 +230,20 @@ ipcMain.handle('memory:read', (_e, { path: projectPath, slug }) => {
 ipcMain.handle('open:path', (_e, p) => shell.openPath(p));
 
 // ── terminals (node-pty)
-ipcMain.handle('pty:create', (_e, { cwd, cols, rows, shellPath }) => {
+ipcMain.handle('pty:create', async (_e, { cwd, cols, rows, shellPath }) => {
   if (!pty) throw new Error('node-pty unavailable: ' + ptyError);
   const id = 'pty' + (++ptySeq);
   const sh = shellPath || (process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash'));
   const args = process.platform === 'win32' && /powershell/i.test(sh) ? ['-NoLogo'] : [];
   let dir = cwd && fs.existsSync(cwd) ? cwd : os.homedir();
-  const proc = pty.spawn(sh, args, { name: 'xterm-256color', cols: cols || 120, rows: rows || 30, cwd: dir, env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }, useConpty: true });
+  // per-project GitHub account and git identity, scoped to this terminal only
+  const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const s = settings.get(dir);
+  const account = await effectiveAccount(s, (gitCache.get(keyOf(dir)) || await gitInfo(dir)).remote);
+  if (account) { const t = await github.token(account); if (t) env.GH_TOKEN = t; }
+  if (s.gitName) { env.GIT_AUTHOR_NAME = s.gitName; env.GIT_COMMITTER_NAME = s.gitName; }
+  if (s.gitEmail) { env.GIT_AUTHOR_EMAIL = s.gitEmail; env.GIT_COMMITTER_EMAIL = s.gitEmail; }
+  const proc = pty.spawn(sh, args, { name: 'xterm-256color', cols: cols || 120, rows: rows || 30, cwd: dir, env, useConpty: true });
   ptys.set(id, { proc, cwd: dir });
   proc.onData((d) => { if (win && !win.isDestroyed()) win.webContents.send('pty:data', { id, data: d }); });
   proc.onExit(({ exitCode }) => { ptys.delete(id); if (win && !win.isDestroyed()) win.webContents.send('pty:exit', { id, exitCode }); });
@@ -149,6 +255,6 @@ ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { 
 
 function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); }
 const checkpoints = new CheckpointWriter(watcher, { projRoot: PROJ_DIR_ROOT });
-app.whenReady().then(() => { ensureKit(); watcher.start(); checkpoints.start(); createWindow(); });
+app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); setTimeout(() => refreshIntegrations(true), 1500); });
 app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });

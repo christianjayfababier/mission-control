@@ -16,6 +16,8 @@
       </div>
       <div class="sb-section">Projects</div>
       <ul id="projects" class="projects"></ul>
+      <div class="sb-section inbox-head"><span>Inbox</span><span id="inbox-count" class="badge"></span><span id="inbox-status" class="inbox-status"></span></div>
+      <div id="inbox" class="inbox"></div>
       <div class="sb-foot">
         <button id="btn-add" class="btn">+ Add folder</button>
         <label class="chk"><input type="checkbox" id="chk-all"> show idle</label>
@@ -27,6 +29,7 @@
         <div class="ph-title">
           <h1 id="ph-name">Select a project</h1>
           <div id="ph-path" class="ph-path"></div>
+          <div id="ph-repo" class="ph-repo"></div>
         </div>
         <div class="ph-actions">
           <div class="seg" role="tablist">
@@ -37,6 +40,7 @@
           <button id="btn-term" class="btn">+ Terminal</button>
           <button id="btn-code" class="btn">Open in VS Code</button>
           <button id="btn-folder" class="btn">Open folder</button>
+          <button id="btn-repo" class="btn" title="GitHub repository and account used for this project's commits and PRs">Repo &amp; account</button>
           <label class="chk"><input type="checkbox" id="chk-finished" checked> finished workers</label>
         </div>
       </header>
@@ -52,8 +56,24 @@
 
       <section id="workers" class="workers">
         <div class="workers-head"><span>Workers</span><span id="workers-count" class="muted"></span></div>
+        <div id="pr-strip" class="pr-strip" hidden></div>
         <div class="grid" id="workers-grid"></div>
       </section>
+
+      <dialog id="dlg-repo" class="dlg">
+        <form method="dialog" id="frm-repo">
+          <h3>Repository &amp; GitHub account</h3>
+          <p class="muted" id="dlg-repo-project"></p>
+          <label>GitHub repository <span class="muted">(URL or owner/name; detected from the git remote when empty)</span><input id="f-repo" type="text" placeholder="https://github.com/owner/name" spellcheck="false"></label>
+          <label>GitHub account for commits and PRs<select id="f-account"><option value="">Machine default (active gh account)</option></select></label>
+          <div class="two">
+            <label>Commit name<input id="f-name" type="text" placeholder="filled from the account when empty"></label>
+            <label>Commit email<input id="f-email" type="text" placeholder="filled from the account when empty"></label>
+          </div>
+          <p class="muted small">The account's token and identity are set in the environment of every new terminal for this project (GH_TOKEN, GIT_AUTHOR_*/GIT_COMMITTER_*), so gh and git push act as that account while other projects keep theirs. Existing terminals keep their old identity: close and reopen them.</p>
+          <div class="dlg-actions"><button value="cancel" class="btn" type="button" id="f-cancel">Cancel</button><button value="save" class="btn primary" id="f-save">Save</button></div>
+        </form>
+      </dialog>
 
       <section id="memory" class="memory" hidden>
         <div class="mem-toolbar">

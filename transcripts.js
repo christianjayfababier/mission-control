@@ -155,10 +155,12 @@ class Worker {
   constructor(id, sessionId, file, metaFile) {
     this.id = id; this.sessionId = sessionId; this.file = file; this.metaFile = metaFile; this.tailer = new Tailer(file);
     this.meta = null; this.startTs = 0; this.lastTs = 0; this.toolCount = 0; this.lastTool = null; this.lastText = ''; this.lastStop = null; this.lastLineType = null; this.outTokens = 0; this.model = null;
-    this.pending = new Map(); this.buf = new LineBuffer(); this.sawPrompt = false;
+    this.pending = new Map(); this.buf = new LineBuffer(); this.sawPrompt = false; this.gitBranch = null; this.cwd = null;
   }
   loadMeta() { if (this.meta) return; try { this.meta = JSON.parse(fs.readFileSync(this.metaFile, 'utf8')); } catch { this.meta = {}; } }
   apply(o, out) {
+    if (o.gitBranch && o.gitBranch !== 'HEAD') this.gitBranch = o.gitBranch;
+    if (o.cwd) this.cwd = o.cwd;
     if (o.type !== 'user' && o.type !== 'assistant') return;
     const ts = o.timestamp ? new Date(o.timestamp).getTime() : 0;
     if (ts) { if (!this.startTs) this.startTs = ts; this.lastTs = Math.max(this.lastTs, ts); }
@@ -204,6 +206,7 @@ class Worker {
       id: this.id, sessionId: this.sessionId, role: (this.meta && this.meta.agentType) || (sp && sp.type) || 'agent', task: (this.meta && this.meta.description) || (sp && sp.desc) || '',
       status: st, startTs: this.startTs, lastTs: this.lastTs, endTs: st === 'running' ? null : this.lastTs, toolCount: this.toolCount, outTokens: this.outTokens, model: this.model,
       lastTool: this.lastTool ? `${this.lastTool.name} ${this.lastTool.desc || ''}`.trim() : null, lastText: (this.lastText || '').slice(0, 300),
+      gitBranch: this.gitBranch, cwd: this.cwd,
     };
   }
 }
