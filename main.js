@@ -15,6 +15,8 @@ let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
 
 const DATA_DIR = path.join(os.homedir(), '.claude', 'mission-control');
+const PROJ_DIR_ROOT = path.join(os.homedir(), '.claude', 'projects');
+const START_VIEW = (() => { const i = process.argv.indexOf('--view'); return i >= 0 ? process.argv[i + 1] : null; })();
 const REGISTRY = path.join(DATA_DIR, 'projects.json');
 const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
@@ -42,7 +44,7 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW });
     sendSnapshot();
     if (SCREENSHOT) setTimeout(async () => {
       try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.resolve(SCREENSHOT), img.toPNG()); console.log('screenshot written', path.resolve(SCREENSHOT)); }
@@ -75,6 +77,50 @@ ipcMain.handle('projects:add', async () => {
 ipcMain.handle('projects:remove', (_e, p) => { writeJson(REGISTRY, registry().filter((x) => x.path.toLowerCase() !== String(p).toLowerCase())); sendSnapshot(); return true; });
 ipcMain.handle('open:code', (_e, p) => { try { spawn('cmd.exe', ['/c', 'code', p], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); return true; } catch (e) { return String(e); } });
 ipcMain.handle('open:folder', (_e, p) => shell.openPath(p));
+
+// ── memory (per-project notes under ~/.claude/projects/<slug>/memory)
+function slugCandidates(projectPath, knownSlug) {
+  const out = [];
+  if (knownSlug) out.push(knownSlug);
+  if (projectPath) {
+    const base = projectPath.replace(/[\\/]+$/, '').replace(/[:\\/]/g, '-');
+    out.push(base, base.charAt(0).toLowerCase() + base.slice(1), base.charAt(0).toUpperCase() + base.slice(1));
+  }
+  return [...new Set(out)];
+}
+function parseFrontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  if (!m) return { meta: {}, body: text };
+  const meta = {};
+  let curKey = null;
+  for (const raw of m[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(raw);
+    const sub = /^\s+([A-Za-z_][\w-]*):\s*(.*)$/.exec(raw);
+    if (kv) { curKey = kv[1]; meta[curKey] = kv[2].trim(); }
+    else if (sub && curKey) { meta[curKey + '.' + sub[1]] = sub[2].trim(); }
+  }
+  return { meta, body: text.slice(m[0].length) };
+}
+ipcMain.handle('memory:read', (_e, { path: projectPath, slug }) => {
+  for (const s of slugCandidates(projectPath, slug)) {
+    const dir = path.join(PROJ_DIR_ROOT, s, 'memory');
+    if (!fs.existsSync(dir)) continue;
+    let index = ''; try { index = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8'); } catch { /* none */ }
+    const notes = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!/\.md$/i.test(f) || /^MEMORY\.md$/i.test(f)) continue;
+      const full = path.join(dir, f);
+      let text = ''; let st = null;
+      try { text = fs.readFileSync(full, 'utf8'); st = fs.statSync(full); } catch { continue; }
+      const { meta, body } = parseFrontmatter(text);
+      const links = [...new Set([...body.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].map((x) => x[1].trim()))];
+      notes.push({ file: full, filename: f, name: meta.name || f.replace(/\.md$/i, ''), description: meta.description || '', type: meta['metadata.type'] || meta.type || 'note', body, links, mtime: st ? st.mtimeMs : 0 });
+    }
+    return { exists: true, dir, slug: s, index, notes };
+  }
+  return { exists: false, dir: projectPath ? path.join(PROJ_DIR_ROOT, slugCandidates(projectPath, slug)[0], 'memory') : null, slug: null, index: '', notes: [] };
+});
+ipcMain.handle('open:path', (_e, p) => shell.openPath(p));
 
 // ── terminals (node-pty)
 ipcMain.handle('pty:create', (_e, { cwd, cols, rows, shellPath }) => {

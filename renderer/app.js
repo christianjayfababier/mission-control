@@ -48,9 +48,11 @@ function renderSidebar() {
 
 // ───────────── project selection / header
 function currentProject() { return (state.snapshot.projects || []).find((p) => p.key === state.selected) || null; }
+window.MC = { currentProject: () => currentProject(), state };
 function selectProject(key) {
   state.selected = key; state.maximized = null;
   const p = currentProject();
+  document.dispatchEvent(new CustomEvent('mc:project-selected', { detail: { key } }));
   renderSidebar();
   $('#ph-name').textContent = p ? p.name : 'Select a project';
   $('#ph-path').textContent = p ? (p.path || '') : '';

@@ -32,6 +32,15 @@ Built 2026-09-11. Electron + xterm.js + node-pty, no bundler, no framework.
 - **Session tabs:** one per recent Claude session in that project, whether it runs in this app's terminal or in VS Code. They show the orchestrator's prompts, its messages, every tool call and every worker it spawned, live.
 - **Workers:** one window per subagent of the selected project, appearing the moment it is spawned: role, task, status (running pulses), duration, tool count, tokens, current tool, and a live log of tool calls and messages. Maximize with ⤢, hide with ×, or untick **finished workers** to keep only running ones.
 
+## Memory view
+
+The **Work | Memory** switch in the header swaps the right side for the selected project's memory: the notes Claude keeps in `~/.claude/projects/<slug>/memory/*.md` (one fact per file with `name`, `description`, `type` in the frontmatter and `[[links]]` between notes).
+
+- **Graph:** a mind map with the project as the hub and one node per note, coloured by type (project, user, feedback, reference). Edges follow the `[[links]]`. A dashed grey node is a link to a note that has not been written yet. Drag nodes, scroll to zoom, double-click the background to reset, click a node to read it.
+- **Detail panel:** the note's description, type, file and last update, its content rendered, the notes it links to and the notes that link to it, and **Open in VS Code** / **Open file**. With nothing selected it shows the project's `MEMORY.md` index with clickable entries.
+- **List:** the same notes as cards, newest first. **Search** filters both views by name, description and content.
+- The view refreshes every 5 seconds while open, so a memory Claude saves appears without a restart. `--view memory` opens the app straight into it.
+
 ## How it knows what's running
 
 Claude Code writes every session to `~/.claude/projects/<slug>/<session>.jsonl` and every subagent to `<slug>/<session>/subagents/agent-<id>.jsonl` (+ `.meta.json` with the role and task). `transcripts.js` tails those files incrementally and streams display-ready lines to the window over IPC. Workers are threads inside the orchestrator's process, so they have no terminal of their own; their windows are live transcript views, which is the same information a terminal would show.
@@ -42,7 +51,7 @@ Claude Code writes every session to `~/.claude/projects/<slug>/<session>.jsonl` 
 main.js          Electron main: window, node-pty terminals, IPC, project registry, screenshot mode
 transcripts.js   session/worker discovery and incremental tailing
 preload.js       contextBridge API (window.mc)
-renderer/        index.html, app.js, styles.css (vanilla JS + xterm.js)
+renderer/        index.html, app.js (work view), memory.js (memory graph), styles.css (vanilla JS + xterm.js)
 Mission Control.cmd   launcher
 ```
 

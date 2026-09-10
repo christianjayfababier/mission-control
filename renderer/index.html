@@ -29,6 +29,10 @@
           <div id="ph-path" class="ph-path"></div>
         </div>
         <div class="ph-actions">
+          <div class="seg" role="tablist">
+            <button id="view-work" class="seg-btn active" role="tab">Work</button>
+            <button id="view-memory" class="seg-btn" role="tab">Memory</button>
+          </div>
           <button id="btn-claude" class="btn primary" title="Type 'claude' into the active terminal">Launch Claude here</button>
           <button id="btn-term" class="btn">+ Terminal</button>
           <button id="btn-code" class="btn">Open in VS Code</button>
@@ -50,6 +54,31 @@
         <div class="workers-head"><span>Workers</span><span id="workers-count" class="muted"></span></div>
         <div class="grid" id="workers-grid"></div>
       </section>
+
+      <section id="memory" class="memory" hidden>
+        <div class="mem-toolbar">
+          <input id="mem-search" type="search" placeholder="Search memories…" spellcheck="false">
+          <div class="seg">
+            <button id="mem-graph-btn" class="seg-btn active">Graph</button>
+            <button id="mem-list-btn" class="seg-btn">List</button>
+          </div>
+          <div id="mem-legend" class="legend"></div>
+          <span class="spacer"></span>
+          <span id="mem-dir" class="muted mono"></span>
+          <button id="mem-refresh" class="btn small">Refresh</button>
+          <button id="mem-open-dir" class="btn small">Open folder</button>
+        </div>
+        <div class="mem-body">
+          <div id="mem-canvas-wrap" class="mem-canvas-wrap">
+            <canvas id="mem-canvas"></canvas>
+            <div id="mem-empty" class="empty" hidden></div>
+            <div id="mem-list" class="mem-list" hidden></div>
+          </div>
+          <aside id="mem-detail" class="mem-detail">
+            <div class="mem-detail-empty muted">Click a memory to read it. Drag nodes to rearrange. Scroll to zoom.</div>
+          </aside>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -57,5 +86,6 @@
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="app.js"></script>
+  <script src="memory.js"></script>
 </body>
 </html>

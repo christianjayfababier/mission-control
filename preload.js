@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('mc', {
   removeProject: (p) => ipcRenderer.invoke('projects:remove', p),
   openInCode: (p) => ipcRenderer.invoke('open:code', p),
   openFolder: (p) => ipcRenderer.invoke('open:folder', p),
+  openPath: (p) => ipcRenderer.invoke('open:path', p),
+  readMemory: (opts) => ipcRenderer.invoke('memory:read', opts),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
   ptyWrite: (id, data) => ipcRenderer.send('pty:write', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
