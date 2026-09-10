@@ -59,9 +59,11 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .tab .x { opacity: .5; } .tab .x:hover { opacity: 1; color: var(--red); }
 .tab .st { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .tab .st.working, .tab .st.live { background: var(--green); } .tab .st.waiting { background: var(--amber); }
-.orch-body { position: relative; flex: 1; min-height: 0; }
-.pane { position: absolute; inset: 0; display: none; }
+.orch-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.pane { position: absolute; inset: 0; display: none; overflow: hidden; }
 .pane.active { display: block; }
+.pane.sess.active { display: flex; flex-direction: column; }
+.pane.sess .wk-body { flex: 1; min-height: 0; height: 100%; overflow-y: auto; }
 .pane.term { padding: 6px 6px 2px 8px; }
 .pane.term .xterm { height: 100%; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 30px; line-height: 1.6; }

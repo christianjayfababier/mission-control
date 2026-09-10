@@ -216,7 +216,8 @@ $('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; re
 })();
 
 // ───────────── data feed
-window.mc.onEnv((env) => { state.env = env; if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
+window.mc.onEnv((env) => { state.env = env;
+  if (env.startView === 'session') setTimeout(() => { const p = currentProject(); if (p && p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar();
   const p = currentProject();
