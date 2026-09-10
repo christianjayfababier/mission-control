@@ -91,7 +91,7 @@ function renderTabs() {
   const leadHost = leadSid ? hostOf(leadSid) : null;
   const lt = el('div', 'tab lead' + (active === 'lead' ? ' active' : ''));
   lt.appendChild(el('span', 'st ' + (leadSess ? leadSess.status : leadHost ? 'live' : '')));
-  lt.appendChild(el('span', null, 'Orchestrator'));
+  lt.appendChild(el('span', null, `${window.Persona.forLead(p).name} · Orchestrator`));
   lt.title = leadSess ? `${leadSess.status} · ${leadSess.title}` : 'Start or resume the lead session for this project';
   lt.onclick = () => activateTab('lead'); tabs.appendChild(lt);
   const counts = (window.Board && window.Board.counts(p)) || p.boardCounts || { tickets: 0, todos: 0 };
@@ -102,7 +102,7 @@ function renderTabs() {
   }
   for (const t of state.terms.get(p.key) || []) {
     const tab = el('div', 'tab' + (active === t.ptyId ? ' active' : ''));
-    tab.appendChild(el('span', null, t.title + (t.lead ? ' ▸ orchestrator' : t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
+    tab.appendChild(el('span', null, t.title + (t.lead ? ' ▸ ' + window.Persona.forLead(p).name : t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
     const x = el('span', 'x', '×'); x.title = 'Close terminal'; x.onclick = (e) => { e.stopPropagation(); closeTerminal(p.key, t.ptyId); };
     tab.appendChild(x); tab.onclick = () => activateTab(t.ptyId); tabs.appendChild(tab);
   }
@@ -218,7 +218,7 @@ const STANDUP_NEW = 'Start of day in Mission Control. Run the standup from your 
 const STANDUP_RESUME = 'Resumed in Mission Control. Re-read the checkpoint and memory, tell me briefly where we are and what is unfinished, then wait for my instructions.';
 async function launchLead(p, opts = {}) {
   let sys = state.env.kitFile;
-  try { sys = (await window.mc.leadPrepare(p.path)) || sys; } catch { /* fall back to the plain rules file */ }
+  try { sys = (await window.mc.leadPrepare(p.path, window.Persona.forLead(p).name)) || sys; } catch { /* fall back to the plain rules file */ }
   const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: sys, prompt: opts.resume ? STANDUP_RESUME : STANDUP_NEW });
   if (!t) return;
   state.lead.set(p.key, t.sessionId); saveLead();
@@ -235,7 +235,9 @@ function renderLeadPane(p) {
   if (pane.dataset.key === key) return pane;
   pane.dataset.key = key; pane.innerHTML = '';
   const card = el('div', 'lead-card'); pane.appendChild(card);
-  card.appendChild(el('h2', null, `Orchestrator — ${p.name}`));
+  const who = window.Persona.forLead(p);
+  const h = el('div', 'lead-h'); const av = el('img', 'sess-avatar'); av.src = who.avatar; av.alt = who.name; h.appendChild(av);
+  const ht = el('div'); ht.appendChild(el('h2', null, `${who.name} — ${who.title}`)); ht.appendChild(el('div', 'muted', p.name)); h.appendChild(ht); card.appendChild(h);
   if (mode === 'starting') {
     card.appendChild(el('p', 'lead-sub', `Starting the lead session in ${host.title} and briefing it. This tab switches to the conversation as soon as it answers.`));
     const b = el('button', 'btn', `Watch ${host.title}`); b.onclick = () => activateTab(host.ptyId); card.appendChild(b);
@@ -278,6 +280,7 @@ function refreshSessionFooters(p) {
   for (const s of p.sessions) {
     const pane = state.panes.get('session:' + s.id); if (!pane || !pane.foot) continue;
     const host = hostOf(s.id);
+    renderSessionHead(pane, p, s, host);
     const mode = host ? 'host' : 'remote';
     if (pane.foot.dataset.mode !== mode) {
       pane.foot.dataset.mode = mode; pane.foot.innerHTML = '';
@@ -311,12 +314,13 @@ function ensurePane(kind, id, parent, cls) {
   let pane = state.panes.get(paneId);
   if (pane) { if (pane.el.parentElement !== parent) parent.appendChild(pane.el); return pane; }
   const wrap = el('div', cls || 'pane');
+  let head = null; if (kind === 'session') { head = el('div', 'sess-head'); wrap.appendChild(head); }
   const body = el('div', 'wk-body');
   wrap.appendChild(body);
   let foot = null;
   if (kind === 'session') { foot = el('div', 'sess-foot'); wrap.appendChild(foot); }
   parent.appendChild(wrap);
-  pane = { el: wrap, body, foot, lastSeq: 0, kind, id };
+  pane = { el: wrap, body, head, foot, lastSeq: 0, kind, id };
   state.panes.set(paneId, pane);
   window.mc.lines(kind, id, 0).then((lines) => appendLines(pane, lines));
   return pane;
@@ -350,8 +354,11 @@ function renderWorkers() {
       let card = grid.querySelector(`[data-id="${w.id}"]`);
       if (!card) {
         card = el('div', 'wk'); card.dataset.id = w.id;
+        const who = window.Persona.forWorker(w);
         const head = el('div', 'wk-head');
-        head.appendChild(el('span', 'wk-status')); head.appendChild(el('span', 'wk-role')); head.appendChild(el('span', 'wk-task')); head.appendChild(el('span', 'wk-meta'));
+        const av = el('img', 'wk-avatar'); av.src = who.avatar; av.alt = who.name; av.title = `${who.name} · ${who.title}`; head.appendChild(av);
+        const line1 = el('div', 'wk-who'); line1.appendChild(el('span', 'wk-status')); line1.appendChild(el('span', 'wk-name', who.name)); line1.appendChild(el('span', 'wk-role', who.title)); head.appendChild(line1);
+        head.appendChild(el('span', 'wk-task')); head.appendChild(el('span', 'wk-meta')); head.appendChild(el('span', 'wk-work'));
         const bMax = el('button', 'btn small', '⤢'); bMax.title = 'Maximize / restore'; bMax.onclick = () => { state.maximized = state.maximized === w.id ? null : w.id; renderWorkers(); };
         const bX = el('button', 'btn small', '×'); bX.title = 'Hide this worker window'; bX.onclick = () => { state.dismissed.add(w.id); if (state.maximized === w.id) state.maximized = null; renderWorkers(); };
         head.appendChild(bMax); head.appendChild(bX);
@@ -362,18 +369,12 @@ function renderWorkers() {
       }
       card.className = 'wk ' + w.status;
       card.querySelector('.wk-status').className = 'wk-status ' + w.status;
-      card.querySelector('.wk-role').textContent = w.role;
       card.querySelector('.wk-task').textContent = w.task || '(no description)'; card.querySelector('.wk-task').title = w.task || '';
       const dur = fmtAgo((w.status === 'running' ? Date.now() : w.lastTs) - w.startTs);
       const meta = card.querySelector('.wk-meta');
-      const sig = `${w.status}|${dur}|${w.toolCount}|${w.outTokens}|${w.model}|${w.gitBranch}|${p.branch}|${w.lastTool}|${(p.prs || []).length}`;
-      if (meta.dataset.sig !== sig) {
-        meta.dataset.sig = sig; meta.textContent = `${w.status.toUpperCase()} · ${dur} · ${modelShort(w.model)} · ${w.toolCount} tools · ${fmtTok(w.outTokens)} out`;
-        if (w.gitBranch && w.gitBranch !== p.branch) { meta.append(' · ⎇ '); const b = el('span', 'branch', w.gitBranch); meta.appendChild(b); }
-        const pr = w.gitBranch ? (p.prs || []).find((x) => x.branch === w.gitBranch) : null;
-        if (pr) { meta.append(' · '); const a = el('a', 'pr-link', `PR #${pr.number}`); a.title = pr.title; a.onclick = () => window.mc.openUrl(pr.url); meta.appendChild(a); }
-        if (w.status === 'running' && w.lastTool) meta.append(' · now: ' + w.lastTool.slice(0, 40));
-      }
+      const sig = `${w.status}|${dur}|${w.toolCount}|${w.outTokens}|${w.model}|${w.lastTool}`;
+      if (meta.dataset.sig !== sig) { meta.dataset.sig = sig; meta.textContent = `${w.status.toUpperCase()} · ${dur} · ${modelShort(w.model)} · ${w.toolCount} tools · ${fmtTok(w.outTokens)} out${w.status === 'running' && w.lastTool ? ' · now: ' + w.lastTool.slice(0, 40) : ''}`; }
+      renderWorkLine(card.querySelector('.wk-work'), p, { branch: w.gitBranch, cwd: w.cwd });
     }
   }
   for (const card of [...grid.children]) if (!wanted.has('wk:' + card.dataset.id)) card.remove();
@@ -388,6 +389,42 @@ $('#btn-code').onclick = () => { const p = currentProject(); if (p && p.path) wi
 $('#btn-folder').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openFolder(p.path); };
 $('#chk-all').onchange = (e) => { state.showIdle = e.target.checked; renderSidebar(); };
 $('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; renderWorkers(); };
+
+// session pane header: who this is (lead or plain session), and what they are on
+function renderSessionHead(pane, p, s, host) {
+  const isLead = state.lead.get(p.key) === s.id;
+  const who = isLead ? window.Persona.forLead(p) : window.Persona.forSession(s);
+  const running = (p.workers || []).filter((w) => w.status === 'running').length;
+  const sig = `${isLead}|${s.status}|${s.gitBranch}|${running}|${(p.inflight || []).length}|${host ? host.title : ''}|${s.model}`;
+  if (pane.head.dataset.sig === sig) return; pane.head.dataset.sig = sig; pane.head.innerHTML = '';
+  const av = el('img', 'sess-avatar'); av.src = who.avatar; av.alt = who.name; pane.head.appendChild(av);
+  const col = el('div', 'sess-who');
+  const l1 = el('div', 'sess-name'); l1.appendChild(el('span', 'st ' + s.status)); l1.appendChild(el('span', 'nm', who.name)); l1.appendChild(el('span', 'ttl', who.title)); l1.appendChild(el('span', 'muted', `· ${modelShort(s.model)} · ${s.status}${host ? ' · ' + host.title : ' · running outside Mission Control'}`)); col.appendChild(l1);
+  const l2 = el('div', 'sess-work wk-work'); col.appendChild(l2); pane.head.appendChild(col);
+  renderWorkLine(l2, p, { branch: s.gitBranch, cwd: null });
+  if (isLead) {
+    l2.appendChild(el('span', 'muted', `· ${running} worker${running === 1 ? '' : 's'} running`));
+    for (const x of (p.inflight || []).slice(0, 4)) { const a = el('a', 'pr-link', `PR #${x.number} ${x.stage === 'merged' ? 'deploying' : x.checks === 'passed' ? 'green' : x.checks === 'failed' ? 'red' : 'checks running'}`); a.title = x.title || ''; a.onclick = () => window.mc.openUrl(x.url); l2.appendChild(a); }
+  }
+}
+
+// ───────────── "working on": branch · PR · ticket · worktree, for workers and sessions
+function renderWorkLine(node, p, { branch, cwd }) {
+  const pr = branch ? (p.prs || []).find((x) => x.branch === branch) : null;
+  const ticket = window.Board && window.Board.ticketFor ? window.Board.ticketFor(p, { branch, pr: pr && pr.url }) : null;
+  const wt = cwd && p.path && cwd.replace(/[\\/]+$/, '').toLowerCase() !== p.path.replace(/[\\/]+$/, '').toLowerCase() ? cwd.split(/[\\/]/).pop() : null;
+  const sig = `${branch}|${pr ? pr.number + ':' + JSON.stringify(pr.checks) + pr.review : ''}|${ticket ? ticket.id + ticket.status : ''}|${wt}`;
+  if (node.dataset.sig === sig) return; node.dataset.sig = sig; node.innerHTML = '';
+  if (!branch && !pr && !ticket) { node.appendChild(el('span', 'muted', 'no branch yet')); return; }
+  if (branch) { node.appendChild(el('span', 'lbl', 'on')); node.appendChild(el('span', 'branch' + (branch === p.branch ? ' main' : ''), '⎇ ' + branch)); }
+  if (wt) node.appendChild(el('span', 'muted', `worktree ${wt}`));
+  if (pr) {
+    const a = el('a', 'pr-link', `PR #${pr.number}${pr.draft ? ' draft' : ''}`); a.title = pr.title; a.onclick = () => window.mc.openUrl(pr.url); node.appendChild(a);
+    const c = pr.checks || {}; const ck = c.fail ? el('span', 'ck fail', `✗ ${c.fail} failing`) : c.pending ? el('span', 'ck pending', `⏳ ${c.pending} running`) : c.pass ? el('span', 'ck pass', `✓ ${c.pass} checks`) : null; if (ck) node.appendChild(ck);
+    if (pr.review === 'APPROVED') node.appendChild(el('span', 'ck pass', 'approved')); else if (pr.review === 'CHANGES_REQUESTED') node.appendChild(el('span', 'ck fail', 'changes requested'));
+  }
+  if (ticket) { const t = el('span', 'ticket', `${ticket.id} · ${ticket.status}`); t.title = ticket.title; t.onclick = () => activateTab('tickets'); node.appendChild(t); }
+}
 
 // ───────────── repo, account, pull requests
 function modelShort(m) { m = String(m || ''); return /fable/i.test(m) ? 'fable' : /opus/i.test(m) ? 'opus' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : m ? m.replace(/^claude-/, '').slice(0, 14) : '?'; }

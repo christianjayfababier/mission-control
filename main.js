@@ -164,7 +164,8 @@ ipcMain.handle('notes:answer', (_e, { id, answer }) => {
 ipcMain.handle('notes:dismiss', (_e, { id }) => { if (notes.get(id)) { notes.append({ kind: 'dismiss', id, ts: new Date().toISOString() }); sendSnapshot(); } return true; });
 
 // ── lead launch: rules + the owner's additions + this project's context, in one file for --append-system-prompt-file
-ipcMain.handle('lead:prepare', async (_e, p) => {
+ipcMain.handle('lead:prepare', async (_e, arg) => {
+  const p = typeof arg === 'string' ? arg : arg.path; const leadName = (arg && arg.name) || null;
   const k = keyOf(p); const s = settings.get(p);
   const g = gitCache.get(k) || await gitInfo(p); gitCache.set(k, g);
   const repo = parseRepo(s.repo || g.remote);
@@ -174,7 +175,8 @@ ipcMain.handle('lead:prepare', async (_e, p) => {
   let local = ''; try { local = fs.readFileSync(KIT_LOCAL, 'utf8'); } catch { local = ''; }
   const ctx = [
     '', '', '# This project (filled in by Mission Control at launch)', '',
-    `- Name: ${path.basename(p)} · path: ${p}`,
+    `- Project: ${path.basename(p)} · path: ${p}`,
+    leadName ? `- Your name in Mission Control is **${leadName}**, Lead Orchestrator of this project. Workers appear with their own generated names and titles; the owner will refer to you and to them by those names. Sign inbox notes and plans as ${leadName}.` : '',
     repo ? `- GitHub repository: ${repo.full} (${repo.url}). Current branch: ${g.branch || '?'}.` : '- No GitHub remote is configured for this project. Do not create one on your own; post a decision note first.',
     s.ghAccount
       ? `- GitHub account for this project: "${s.ghAccount}"${s.inferred ? ' (taken from the remote URL; the owner can change it in Mission Control)' : ''}, git identity ${s.gitName || s.ghAccount} <${s.gitEmail || ''}>. Its token is in this terminal's environment (GH_TOKEN${s.inferred ? '' : ', GIT_AUTHOR_* and GIT_COMMITTER_*'}), so gh and git push act as that account. Never run "gh auth switch" and never change git config user.* globally; other projects use other accounts at the same time.`

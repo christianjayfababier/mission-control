@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('mc', {
   boardRemove: (p, kind, id) => ipcRenderer.invoke('board:remove', { path: p, kind, id }),
   onBoard: on('board'),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
-  leadPrepare: (p) => ipcRenderer.invoke('lead:prepare', p),
+  leadPrepare: (p, name) => ipcRenderer.invoke('lead:prepare', { path: p, name }),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
   ptyWrite: (id, data) => ipcRenderer.send('pty:write', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),

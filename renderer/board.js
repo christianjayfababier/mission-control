@@ -174,5 +174,5 @@
     const k = keyOf(board.project); boards.set(k, board);
     for (const st of panes.values()) if (st.p.key === k) render(st);
   });
-  window.Board = { pane, counts: (p) => { const b = boards.get(p.key); return b ? { tickets: b.tickets.filter((t) => t.status !== 'done').length, todos: b.todos.filter((t) => !t.done).length } : (p.boardCounts || null); } };
+  window.Board = { pane, ticketFor: (p, { branch, pr }) => { const b = boards.get(p.key); if (!b) { ensureBoard(p); return null; } return b.tickets.find((t) => (pr && t.pr && t.pr === pr) || (branch && t.branch && t.branch === branch)) || null; }, counts: (p) => { const b = boards.get(p.key); return b ? { tickets: b.tickets.filter((t) => t.status !== 'done').length, todos: b.todos.filter((t) => !t.done).length } : (p.boardCounts || null); } };
 })();
