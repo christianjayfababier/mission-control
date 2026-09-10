@@ -41,6 +41,7 @@
           <button id="btn-code" class="btn">Open in VS Code</button>
           <button id="btn-folder" class="btn">Open folder</button>
           <button id="btn-repo" class="btn" title="GitHub repository and account used for this project's commits and PRs">Repo &amp; account</button>
+          <button id="btn-team" class="btn" title="Roles the orchestrator can dispatch, and the model and effort each one runs at">Team &amp; models</button>
           <label class="chk"><input type="checkbox" id="chk-finished" checked> finished workers</label>
         </div>
       </header>
@@ -73,6 +74,15 @@
           <p class="muted small">The account's token and identity are set in the environment of every new terminal for this project (GH_TOKEN, GIT_AUTHOR_*/GIT_COMMITTER_*), so gh and git push act as that account while other projects keep theirs. Existing terminals keep their old identity: close and reopen them.</p>
           <div class="dlg-actions"><button value="cancel" class="btn" type="button" id="f-cancel">Cancel</button><button value="save" class="btn primary" id="f-save">Save</button></div>
         </form>
+      </dialog>
+
+      <dialog id="dlg-team" class="dlg wide">
+        <h3>Team &amp; models</h3>
+        <p class="muted small" id="dlg-team-project"></p>
+        <p class="muted small">Each role runs at a model and effort. Custom roles come from the project's <code>.claude/agents</code> files and are saved back there; built-in types are stored by Mission Control and handed to the lead. Leave a field empty to let the lead decide. The lead may still escalate a stuck worker to Fable.</p>
+        <div class="team-actions"><button class="btn small" id="team-recommend-all">Apply all recommendations</button><span class="muted small" id="team-status"></span></div>
+        <div id="team-list" class="team-list"></div>
+        <div class="dlg-actions"><button class="btn primary" id="team-close" type="button">Done</button></div>
       </dialog>
 
       <section id="memory" class="memory" hidden>

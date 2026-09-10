@@ -190,6 +190,20 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .dlg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .dlg .small { font-size: 11px; line-height: 1.5; margin: 0; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dlg.wide { width: min(1100px, 94vw); display: flex; flex-direction: column; gap: 10px; max-height: 88vh; }
+.team-actions { display: flex; gap: 10px; align-items: center; }
+.team-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.team-row { display: grid; grid-template-columns: 1.2fr auto 1.4fr; gap: 14px; align-items: start; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.team-row.builtin { border-style: dashed; }
+.team-name { font-weight: 700; font-family: var(--mono); font-size: 12px; }
+.team-title { color: var(--magenta); font-size: 11px; margin: 1px 0 3px; }
+.team-desc { color: var(--muted); font-size: 11px; line-height: 1.45; max-height: 3em; overflow: hidden; }
+.team-ctl { display: grid; grid-template-columns: auto auto; gap: 4px 8px; align-items: center; font-size: 11px; color: var(--muted); }
+.team-sel { background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font-size: 12px; min-width: 120px; }
+.team-rec-head { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.team-rec-model { font-family: var(--mono); font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--bg-3); }
+.team-rec-model.fable { color: var(--amber); } .team-rec-model.opus { color: var(--magenta); } .team-rec-model.sonnet { color: var(--accent); } .team-rec-model.haiku { color: var(--green); }
+.team-reason { color: #c9d4e0; font-size: 11px; line-height: 1.45; margin-top: 3px; }
 .pane.term { padding: 6px 6px 2px 8px; }
 .pane.term .xterm { height: 100%; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 30px; line-height: 1.6; }

@@ -14,6 +14,7 @@ const { CheckpointWriter } = require('./checkpoint');
 const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
 const { Boards } = require('./boards');
 const { PrWatch } = require('./prwatch');
+const team = require('./team');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -169,6 +170,16 @@ ipcMain.handle('settings:set', async (_e, { path: p, patch }) => {
 });
 ipcMain.handle('open:url', (_e, u) => { if (/^https:\/\//i.test(String(u))) shell.openExternal(String(u)); return true; });
 
+// ── team & models: roles the lead can dispatch, each with its model and effort
+ipcMain.handle('team:get', (_e, p) => ({ roster: team.roster(p, settings.get(p).models || {}), models: team.MODELS, efforts: team.EFFORTS }));
+ipcMain.handle('team:set', (_e, { path: p, name, model, effort }) => {
+  const r = team.roster(p, settings.get(p).models || {}).find((x) => x.name === name); if (!r) return null;
+  if (r.source === 'agent') team.setAgentModel(r.file, { model: model || '', effort: effort || '' });
+  else { const s = settings.get(p); const models = { ...(s.models || {}) }; if (model || effort) models[name] = { model: model || null, effort: effort || null }; else delete models[name]; settings.set(p, { models }); }
+  checkpoints.journal(p, `team · owner set ${name} → ${model || 'inherit'} / ${effort || 'default'}`);
+  return team.roster(p, settings.get(p).models || {});
+});
+
 // ── inbox: the owner answers or dismisses the orchestrator's notes
 ipcMain.handle('notes:answer', (_e, { id, answer }) => {
   const n = notes.get(id); if (!n) return null;
@@ -203,6 +214,10 @@ ipcMain.handle('lead:prepare', async (_e, arg) => {
       : '- No GitHub account was chosen for this project in Mission Control, so the machine default applies. Before the first push or PR, post a decision note asking which account to use.',
     `- Inbox script: node "${NOTE_SCRIPT}" (see the Inbox section of your rules). Mission Control's owner reads that inbox.`,
     `- Tickets & todos board: node "${BOARD_SCRIPT}" (see the Tickets section of your rules). The owner sees it in the Tickets and Todos tabs.`,
+    '',
+    '## Model assignments for workers (owner-controlled in Mission Control → Team & models)',
+    'Dispatch each role at the model and effort below: custom roles carry them in their .claude/agents frontmatter already; for built-in types pass the model with the Agent tool. "recommended" means the owner has not overridden Mission Control\'s recommendation. Escalation of a stuck worker to fable stays allowed per your rules.',
+    ...team.roster(p, s.models || {}).map((r) => `- ${r.name}: ${r.model || r.recommended.model}${r.effort || r.recommended.effort ? ' / ' + (r.effort || r.recommended.effort) : ''}${r.model ? (r.source === 'agent' ? ' (agent file)' : ' (owner-set)') : ' (recommended)'}`),
     '',
   ].join('\n');
   const dir = path.join(DATA_DIR, 'generated'); fs.mkdirSync(dir, { recursive: true });

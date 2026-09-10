@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('mc', {
   // orchestrator inbox (notes, questions, decisions)
   notesAnswer: (id, answer) => ipcRenderer.invoke('notes:answer', { id, answer }),
   notesDismiss: (id) => ipcRenderer.invoke('notes:dismiss', { id }),
+  // team & models per project
+  teamGet: (p) => ipcRenderer.invoke('team:get', p),
+  teamSet: (p, name, model, effort) => ipcRenderer.invoke('team:set', { path: p, name, model, effort }),
   // tickets & todos board per project (shared with mc-board.js)
   boardGet: (p) => ipcRenderer.invoke('board:get', p),
   boardAddTickets: (p, items) => ipcRenderer.invoke('board:add', { path: p, kind: 'ticket', items }),

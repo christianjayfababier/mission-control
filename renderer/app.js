@@ -486,6 +486,37 @@ function renderPrStrip(p) {
   };
 })();
 
+// team & models dialog
+(() => {
+  const dlg = $('#dlg-team'); if (!dlg) return;
+  let cur = null; // { p, roster, models, efforts }
+  const status = (m) => { const s = $('#team-status'); s.textContent = m; setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 4000); };
+  function row(r) {
+    const tr = el('div', 'team-row' + (r.source === 'builtin' ? ' builtin' : ''));
+    const who = el('div', 'team-who'); who.appendChild(el('div', 'team-name', r.name)); who.appendChild(el('div', 'team-title', window.Persona.title(r.name) + (r.source === 'builtin' ? ' · built-in' : ' · .claude/agents')));
+    const d = el('div', 'team-desc', r.description); d.title = r.description; who.appendChild(d); tr.appendChild(who);
+    const sel = (opts, val, label) => { const s = el('select', 'team-sel'); const o0 = el('option', null, label); o0.value = ''; s.appendChild(o0); for (const o of opts) { const e = el('option', null, o); e.value = o; if (o === val) e.selected = true; s.appendChild(e); } return s; };
+    const ms = sel(cur.models, r.model, 'lead decides'); const es = sel(cur.efforts, r.effort, 'default');
+    const save = async () => { cur.roster = await window.mc.teamSet(cur.p.path, r.name, ms.value, es.value); status(`saved ${r.name}: ${ms.value || 'lead decides'} / ${es.value || 'default'}`); render(); };
+    ms.onchange = save; es.onchange = save;
+    const ctl = el('div', 'team-ctl'); ctl.appendChild(el('label', null, 'Model')); ctl.appendChild(ms); ctl.appendChild(el('label', null, 'Effort')); ctl.appendChild(es); tr.appendChild(ctl);
+    const rec = el('div', 'team-rec');
+    const match = r.model === r.recommended.model && (r.effort || r.recommended.effort) === r.recommended.effort;
+    const head = el('div', 'team-rec-head'); head.appendChild(el('span', 'team-rec-model ' + r.recommended.model, `${r.recommended.model} / ${r.recommended.effort}`)); head.appendChild(el('span', 'muted', match ? '✓ in use' : 'recommended'));
+    if (!match) { const b = el('button', 'btn small', 'Use'); b.onclick = async () => { cur.roster = await window.mc.teamSet(cur.p.path, r.name, r.recommended.model, r.recommended.effort); status(`${r.name} → ${r.recommended.model} / ${r.recommended.effort}`); render(); }; head.appendChild(b); }
+    rec.appendChild(head); rec.appendChild(el('div', 'team-reason', r.recommended.reason)); tr.appendChild(rec);
+    return tr;
+  }
+  function render() { const list = $('#team-list'); list.innerHTML = ''; if (!cur.roster.length) list.appendChild(el('div', 'muted', 'No roles found.')); for (const r of cur.roster) list.appendChild(row(r)); }
+  $('#btn-team').onclick = async () => {
+    const p = currentProject(); if (!p || !p.path) return;
+    const t = await window.mc.teamGet(p.path); cur = { p, roster: t.roster, models: t.models, efforts: t.efforts };
+    $('#dlg-team-project').textContent = `${p.name} — ${p.path}`; render(); dlg.showModal();
+  };
+  $('#team-recommend-all').onclick = async () => { for (const r of cur.roster) if (!(r.model === r.recommended.model && (r.effort || r.recommended.effort) === r.recommended.effort)) cur.roster = await window.mc.teamSet(cur.p.path, r.name, r.recommended.model, r.recommended.effort); status('all roles set to the recommendation'); render(); };
+  $('#team-close').onclick = () => dlg.close();
+})();
+
 // ───────────── inbox: notes, questions and decisions from the orchestrators
 function renderInbox(snap) {
   const box = $('#inbox'); const all = [];
