@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <title>Mission Control</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sb-head">
+        <div class="brand"><span class="brand-dot"></span> Mission Control</div>
+        <div class="totals" id="totals">—</div>
+      </div>
+      <div class="sb-section">Projects</div>
+      <ul id="projects" class="projects"></ul>
+      <div class="sb-foot">
+        <button id="btn-add" class="btn">+ Add folder</button>
+        <label class="chk"><input type="checkbox" id="chk-all"> show idle</label>
+      </div>
+    </aside>
+
+    <main id="body">
+      <header id="proj-head" class="proj-head">
+        <div class="ph-title">
+          <h1 id="ph-name">Select a project</h1>
+          <div id="ph-path" class="ph-path"></div>
+        </div>
+        <div class="ph-actions">
+          <button id="btn-claude" class="btn primary" title="Type 'claude' into the active terminal">Launch Claude here</button>
+          <button id="btn-term" class="btn">+ Terminal</button>
+          <button id="btn-code" class="btn">Open in VS Code</button>
+          <button id="btn-folder" class="btn">Open folder</button>
+          <label class="chk"><input type="checkbox" id="chk-finished" checked> finished workers</label>
+        </div>
+      </header>
+
+      <section id="orch" class="orch">
+        <div class="tabs" id="orch-tabs"></div>
+        <div class="orch-body" id="orch-body">
+          <div class="empty" id="orch-empty">Pick a project on the left. A terminal opens in its directory; run <code>claude</code> there to start the orchestrator. Workers it spawns appear below.</div>
+        </div>
+      </section>
+
+      <div id="splitter" class="splitter" title="Drag to resize"></div>
+
+      <section id="workers" class="workers">
+        <div class="workers-head"><span>Workers</span><span id="workers-count" class="muted"></span></div>
+        <div class="grid" id="workers-grid"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
