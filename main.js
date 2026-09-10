@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const { TranscriptWatcher } = require('./transcripts');
 const { CheckpointWriter } = require('./checkpoint');
 const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
+const { Boards } = require('./boards');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -33,12 +34,15 @@ function ensureKit() {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(KIT_FILE, fs.readFileSync(path.join(KIT_DIR, 'orchestrator-system.md'), 'utf8').split('{{DATA_DIR}}').join(DATA_DIR));
     fs.copyFileSync(path.join(KIT_DIR, 'mc-note.js'), NOTE_SCRIPT);
+    fs.copyFileSync(path.join(KIT_DIR, 'mc-board.js'), path.join(DATA_DIR, 'mc-board.js'));
     if (!fs.existsSync(KIT_LOCAL)) fs.writeFileSync(KIT_LOCAL, '# Your additions to the orchestrator rules\n\nEverything below is appended to every lead session\'s system prompt after the Mission Control rules. Edit freely; Mission Control never overwrites this file.\n');
   } catch (e) { console.error('kit', e && e.message); }
 }
 const settings = new Settings(path.join(DATA_DIR, 'project-settings.json'));
 const github = new GitHub();
 const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
+const boards = new Boards(path.join(DATA_DIR, 'boards'));
+const BOARD_SCRIPT = path.join(DATA_DIR, 'mc-board.js');
 const gitCache = new Map(); // project key -> { remote, branch, at }
 const prCache = new Map();  // project key -> { prs, error, at }
 /** The account for a project: the chosen one, else the login embedded in the remote URL (https://login@github.com/...) if gh knows it. */
@@ -66,6 +70,7 @@ function enrich(snap) {
     p.repo = parseRepo(s.repo || (g && g.remote));
     p.prs = pr ? pr.prs : []; p.prsError = pr ? pr.error || null : null; p.prsAt = pr ? pr.at : 0;
     p.notes = notes.forProject(p.path);
+    p.boardCounts = boards.counts(p.path);
   }
   snap.openNotes = notes.open().length;
   return snap;
@@ -124,6 +129,13 @@ setInterval(sendSnapshot, 5000); // statuses age even without new lines
 ipcMain.handle('snapshot', () => snapshot());
 setInterval(() => refreshIntegrations(false), 15000);
 setInterval(() => { if (notes.poll()) sendSnapshot(); }, 1500);
+setInterval(() => { const changed = boards.poll(); if (changed.length && win && !win.isDestroyed()) { for (const b of changed) win.webContents.send('board', b); sendSnapshot(); } }, 2000);
+
+// ── tickets & todos board
+ipcMain.handle('board:get', (_e, p) => boards.load(p));
+ipcMain.handle('board:add', (_e, { path: p, kind, items }) => kind === 'todo' ? boards.addTodos(p, items, 'owner') : boards.addTickets(p, items, 'owner'));
+ipcMain.handle('board:patch', (_e, { path: p, kind, id, patch }) => boards.patch(p, kind, id, patch));
+ipcMain.handle('board:remove', (_e, { path: p, kind, id }) => boards.remove(p, kind, id));
 
 // ── repo, GitHub account, git identity per project
 ipcMain.handle('gh:accounts', () => github.listAccounts(true));
@@ -162,6 +174,7 @@ ipcMain.handle('lead:prepare', async (_e, p) => {
       ? `- GitHub account for this project: "${s.ghAccount}"${s.inferred ? ' (taken from the remote URL; the owner can change it in Mission Control)' : ''}, git identity ${s.gitName || s.ghAccount} <${s.gitEmail || ''}>. Its token is in this terminal's environment (GH_TOKEN${s.inferred ? '' : ', GIT_AUTHOR_* and GIT_COMMITTER_*'}), so gh and git push act as that account. Never run "gh auth switch" and never change git config user.* globally; other projects use other accounts at the same time.`
       : '- No GitHub account was chosen for this project in Mission Control, so the machine default applies. Before the first push or PR, post a decision note asking which account to use.',
     `- Inbox script: node "${NOTE_SCRIPT}" (see the Inbox section of your rules). Mission Control's owner reads that inbox.`,
+    `- Tickets & todos board: node "${BOARD_SCRIPT}" (see the Tickets section of your rules). The owner sees it in the Tickets and Todos tabs.`,
     '',
   ].join('\n');
   const dir = path.join(DATA_DIR, 'generated'); fs.mkdirSync(dir, { recursive: true });

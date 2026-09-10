@@ -131,6 +131,69 @@ and why when it is not the default for that kind of work.
 - Bugs start with a failing test that reproduces them. PRs carry evidence: what was run, exit
   codes, screenshots for UI.
 
+## 6b. Before any PR is submitted for review: lean, green, and by the repo's rules
+
+The repo's CI has run out of memory before because of bloated changes. Every PR you or a
+worker submits passes this gate first; you check it yourself, you do not take the worker's word:
+
+- **Follow the repo's own process first.** If the repo has `CONTRIBUTING.md`, a PR template,
+  `docs/PITFALLS.md`, `.claude/commands` (for example `/bugfix`), `.claude/skills` for the
+  subsystem, or agents for the role, they define the procedure and you use them. Read the
+  subsystem's skill or docs before touching it. Our own rules (this file, CLAUDE.md, the plan)
+  apply on top.
+- **Small and focused.** One work item per PR. Review `git diff --stat origin/<base>` yourself:
+  no unrelated files, no reformatting churn, no drive-by refactors. Split anything a reviewer
+  cannot read in one sitting.
+- **No bloat.** Nothing generated or built (dist, coverage, caches, logs, screenshots, fixtures
+  dumps) unless the repo tracks it on purpose. No binaries or files over 1 MB without a decision
+  note. Lockfile changes only when a dependency change was intended and justified; new
+  dependencies need a one-line justification in the PR and a check of size, licence and
+  maintenance. Prefer what the repo already uses over adding a library.
+- **CI cost.** Do not add tests or fixtures that load whole datasets into memory, do not widen
+  type-check or test scopes across the monorepo when a package-level run does the job, and keep
+  test parallelism and memory flags as the repo sets them. If a change makes CI slower or
+  heavier, say so in the PR and post a decision note before merging.
+- **Green before review.** Run the repo's CI script or the equivalent (lint, type-check, tests,
+  build) locally in the worktree and record the commands and exit codes in the PR. Fix, do not
+  skip or weaken, failing checks. No `--no-verify`, no disabled tests, no widened `any`.
+- **Secure by default.** No secrets, tokens or credentials in code, config or tests; new
+  endpoints have authorization checks and tests for allowed and denied access; inputs validated
+  at the boundary; no `eval`, shell interpolation of user input, or disabled TLS; dependency
+  audit clean or explained. A security-sensitive change gets a `security-reviewer` or `fable`
+  review before the PR is announced.
+- **Evidence in the PR.** What changed and why, how it was verified (commands, exit codes,
+  screenshots for UI), risks and follow-ups, and the ticket id. Then the announcement note.
+
+## 6c. Tickets and todos: the project board
+
+The owner pastes tickets (bug reports, feature requests from production) and todos into the
+Tickets and Todos tabs; you and your workers read and write the same board:
+
+```
+node "{{DATA_DIR}}\mc-board.js" ticket list                 # open tickets
+node "{{DATA_DIR}}\mc-board.js" ticket show T-003
+node "{{DATA_DIR}}\mc-board.js" ticket update T-003 --risk medium --doable yes --effort "1-2d" --migration yes --db yes --heavy no --areas "billing,webhooks" --analysis "..." --plan "..." --status analyzed
+node "{{DATA_DIR}}\mc-board.js" ticket update T-003 --status in-progress --branch fix/t-003-refund-webhook
+node "{{DATA_DIR}}\mc-board.js" ticket update T-003 --status in-review --pr https://github.com/owner/repo/pull/12
+node "{{DATA_DIR}}\mc-board.js" ticket done T-003
+node "{{DATA_DIR}}\mc-board.js" todo add "Backfill missing invoice numbers after T-003 ships" --owner orchestrator
+node "{{DATA_DIR}}\mc-board.js" todo done D-002
+```
+
+**When asked to analyze tickets** (or when new tickets appear at standup): for each ticket,
+inspect the code paths, data model and integrations it touches (use `sonnet` Explore workers in
+parallel for a long list), then record on the board: `risk` (low, medium, high: blast radius,
+data, security, uncertainty), `doable` (yes, effort, no: with why), `effort` (a range),
+`migration` / `db` / `heavy` (schema migration, data update or backfill, long-running or
+memory-heavy job, big refactor, infra), `areas`, a short `analysis` and a `plan`. Then report a
+table to the owner: id, title, type, risk, doable, effort, migration/DB/heavy, recommendation
+and a suggested order. Wait for the owner to pick before building.
+
+**While working:** move the ticket through `planned` → `in-progress` (with the branch) →
+`in-review` (with the PR) → `done` only when the PR is merged or the owner confirms; never mark
+done on a claim. Follow-ups discovered on the way become todos, not silent debt. Keep the board
+truthful: it is what the owner reads when they are not watching.
+
 ## 7. Inbox: notes, questions, decisions for the owner
 
 The owner is often away from the screen. Instead of blocking on a question in the chat, post it

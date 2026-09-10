@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('mc', {
   // orchestrator inbox (notes, questions, decisions)
   notesAnswer: (id, answer) => ipcRenderer.invoke('notes:answer', { id, answer }),
   notesDismiss: (id) => ipcRenderer.invoke('notes:dismiss', { id }),
+  // tickets & todos board per project (shared with mc-board.js)
+  boardGet: (p) => ipcRenderer.invoke('board:get', p),
+  boardAddTickets: (p, items) => ipcRenderer.invoke('board:add', { path: p, kind: 'ticket', items }),
+  boardAddTodos: (p, items) => ipcRenderer.invoke('board:add', { path: p, kind: 'todo', items }),
+  boardPatch: (p, kind, id, patch) => ipcRenderer.invoke('board:patch', { path: p, kind, id, patch }),
+  boardRemove: (p, kind, id) => ipcRenderer.invoke('board:remove', { path: p, kind, id }),
+  onBoard: on('board'),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
   leadPrepare: (p) => ipcRenderer.invoke('lead:prepare', p),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),

@@ -54,7 +54,15 @@ function renderSidebar() {
 
 // ───────────── project selection / header
 function currentProject() { return (state.snapshot.projects || []).find((p) => p.key === state.selected) || null; }
-window.MC = { currentProject: () => currentProject(), state };
+window.MC = {
+  currentProject: () => currentProject(), state,
+  /** Type a message into the project's lead session (or any Claude session hosted here). Returns the terminal title, or null. */
+  sendToLead(p, msg) {
+    let host = null; const lead = state.lead.get(p.key); if (lead) host = hostOf(lead);
+    if (!host) for (const t of state.terms.get(p.key) || []) if (t.sessionId && hostOf(t.sessionId)) { host = t; break; }
+    if (!host) return null; sendToSession(host.sessionId, msg); return host.title;
+  },
+};
 function selectProject(key) {
   state.selected = key; state.maximized = null;
   const p = currentProject();
@@ -86,6 +94,12 @@ function renderTabs() {
   lt.appendChild(el('span', null, 'Orchestrator'));
   lt.title = leadSess ? `${leadSess.status} · ${leadSess.title}` : 'Start or resume the lead session for this project';
   lt.onclick = () => activateTab('lead'); tabs.appendChild(lt);
+  const counts = (window.Board && window.Board.counts(p)) || p.boardCounts || { tickets: 0, todos: 0 };
+  for (const [id, label, n] of [['tickets', 'Tickets', counts.tickets], ['todos', 'Todos', counts.todos]]) {
+    const bt = el('div', 'tab board-tab' + (active === id ? ' active' : ''));
+    bt.appendChild(el('span', null, label)); if (n) bt.appendChild(el('span', 'badge', String(n)));
+    bt.onclick = () => activateTab(id); tabs.appendChild(bt);
+  }
   for (const t of state.terms.get(p.key) || []) {
     const tab = el('div', 'tab' + (active === t.ptyId ? ' active' : ''));
     tab.appendChild(el('span', null, t.title + (t.lead ? ' ▸ orchestrator' : t.sessionId || t.claudeAt ? ' ▸ claude' : '')));
@@ -112,6 +126,8 @@ function activateTab(id) {
     const hosted = sid && hostOf(sid) && p.sessions.some((s) => s.id === sid);
     if (hosted) { const pane = ensurePane('session', sid, $('#orch-body'), 'pane sess'); pane.el.classList.add('active'); }
     else { renderLeadPane(p).classList.add('active'); }
+  } else if (id === 'tickets' || id === 'todos') {
+    if (window.Board) window.Board.pane(id, p).classList.add('active');
   } else if (id.startsWith('sess:')) {
     const sid = id.slice(5);
     const pane = ensurePane('session', sid, $('#orch-body'), 'pane sess');
@@ -481,7 +497,7 @@ async function answerNote(n, answer) {
 
 // ───────────── data feed
 window.mc.onEnv((env) => { state.env = env;
-  if (env.startView === 'session') setTimeout(() => { const p = currentProject(); if (p && p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
+  if (env.startView) setTimeout(() => { const p = currentProject(); if (!p) return; if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); } else if (env.startView !== 'memory') activateTab(env.startView); }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
