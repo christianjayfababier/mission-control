@@ -8,6 +8,9 @@
   const keyOf = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
   const STATUSES = ['new', 'analyzed', 'planned', 'in-progress', 'in-review', 'blocked', 'done'];
   const ago = (iso) => { if (!iso) return ''; const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000); return s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd'; };
+  const fmtDate = (iso) => { const d = new Date(iso); return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ' ' + d.toTimeString().slice(0, 5); };
+  const dueText = (t) => t.status === 'done' ? (t.dueAt && t.doneAt ? (new Date(t.doneAt) <= new Date(t.dueAt) ? 'on time' : 'late') : '—') : t.dueAt ? fmtDate(t.dueAt) : t.eta ? 'on start' : '?';
+  const dueClass = (t) => t.status === 'done' || !t.dueAt ? '' : new Date(t.dueAt) < new Date() ? 'overdue' : new Date(t.dueAt) - new Date() < 864e5 ? 'soon' : '';
   const tri = (v) => v === true ? '✓ yes' : v === false ? '– no' : '?';
 
   /** Paste parser: numbered / bulleted lines become items; otherwise blank-line separated blocks (first line = title). */
@@ -46,7 +49,7 @@
     const paste = el('button', 'btn small' + (st.pasteOpen ? ' primary' : ''), st.pasteOpen ? 'Close paste' : 'Paste ' + kind); paste.onclick = () => { st.pasteOpen = !st.pasteOpen; render(st); }; bar.appendChild(paste);
     if (kind === 'tickets') {
       const send = el('button', 'btn small', st.selected.size ? `Send ${st.selected.size} selected to orchestrator` : 'Send open tickets to orchestrator');
-      send.title = 'Asks the lead to analyze them (risk, doability, effort, migration / DB / heavy work) and record the results here';
+      send.title = 'Asks the lead to analyze them (risk, doability, effort, delivery estimate, migration / DB / heavy work) and record the results here';
       send.onclick = () => sendTickets(st, st.selected.size ? open.filter((t) => st.selected.has(t.id)) : open);
       bar.appendChild(send);
     } else {
@@ -65,7 +68,7 @@
     return b.todos.filter((t) => st.filter === 'all' || (st.filter === 'done' ? t.done : !t.done));
   }
   function asText(kind, items) {
-    if (kind === 'tickets') return items.map((t) => `${t.id} [${t.type}/${t.priority}] ${t.title}${t.body ? '\n    ' + t.body.replace(/\n/g, '\n    ') : ''}${t.risk ? `\n    risk ${t.risk} · doable ${t.doable || '?'} · effort ${t.effort || '?'} · migration ${tri(t.migration)} · db ${tri(t.db)} · heavy ${tri(t.heavy)}` : ''}`).join('\n');
+    if (kind === 'tickets') return items.map((t) => `${t.id} [${t.type}/${t.priority}] ${t.title}${t.body ? '\n    ' + t.body.replace(/\n/g, '\n    ') : ''}${t.risk ? `\n    risk ${t.risk} · doable ${t.doable || '?'} · effort ${t.effort || '?'} · ETA ${t.eta || '?'}${t.dueAt ? ' · delivery ' + fmtDate(t.dueAt) : ''} · migration ${tri(t.migration)} · db ${tri(t.db)} · heavy ${tri(t.heavy)}` : ''}`).join('\n');
     return items.map((t) => `- [${t.done ? 'x' : ' '}] ${t.id} ${t.text}`).join('\n');
   }
 
@@ -93,7 +96,7 @@
     const items = visible(st); const p = st.p;
     if (!items.length) return el('div', 'bd-empty', st.filter === 'open' ? 'No open tickets. Paste some, or let the orchestrator add them with mc-board.js.' : 'Nothing here.');
     const table = el('table', 'bd-table'); const thead = el('thead'); const hr = el('tr');
-    for (const h of ['', 'ID', 'Title', 'Type', 'Pri', 'Status', 'Risk', 'Doable', 'Effort', 'Migration', 'DB', 'Heavy', 'PR', '']) hr.appendChild(el('th', null, h));
+    for (const h of ['', 'ID', 'Title', 'Type', 'Pri', 'Status', 'Risk', 'Doable', 'Effort', 'ETA', 'Delivery', 'Migration', 'DB', 'Heavy', 'PR', '']) hr.appendChild(el('th', null, h));
     thead.appendChild(hr); table.appendChild(thead);
     const tb = el('tbody');
     for (const t of items) {
@@ -110,6 +113,8 @@
       tr.appendChild(el('td', 'risk ' + (t.risk || ''), t.risk || '?'));
       tr.appendChild(el('td', null, t.doable || '?'));
       tr.appendChild(el('td', null, t.effort || '?'));
+      const ce = el('td', 'bd-eta', t.eta || '?'); if (t.etaNotes) ce.title = t.etaNotes; tr.appendChild(ce);
+      tr.appendChild(el('td', 'bd-due ' + dueClass(t), dueText(t)));
       tr.appendChild(el('td', 'tri ' + (t.migration === true ? 'yes' : ''), tri(t.migration)));
       tr.appendChild(el('td', 'tri ' + (t.db === true ? 'yes' : ''), tri(t.db)));
       tr.appendChild(el('td', 'tri ' + (t.heavy === true ? 'yes' : ''), tri(t.heavy)));
@@ -119,10 +124,11 @@
       const del = el('button', 'btn small', '✕'); del.title = 'Delete ticket'; del.onclick = async () => { if (confirm(`Delete ${t.id} "${t.title}"?`)) { boards.set(p.key, await window.mc.boardRemove(p.path, 'ticket', t.id)); render(st); } }; ca.appendChild(del);
       tr.appendChild(ca); tb.appendChild(tr);
       if (st.open === t.id) {
-        const dr = el('tr', 'bd-detail'); const td = el('td'); td.colSpan = 14;
+        const dr = el('tr', 'bd-detail'); const td = el('td'); td.colSpan = 16;
         const grid = el('div', 'bd-detail-grid');
         const block = (label, text) => { const d = el('div'); d.appendChild(el('div', 'bd-label', label)); d.appendChild(el('div', 'bd-text', text || '—')); return d; };
         grid.appendChild(block('Details', t.body)); grid.appendChild(block('Analysis (risk, dependencies, data)', t.analysis)); grid.appendChild(block('Plan', t.plan));
+        grid.appendChild(block('Delivery estimate' + (t.eta ? ' · ' + t.eta : ''), (t.etaNotes || '') + (t.startedAt ? '\n\nStarted ' + fmtDate(t.startedAt) + (t.dueAt ? ' · promised by ' + fmtDate(t.dueAt) : '') : t.eta ? '\n\nDelivery date is set when work starts (status in-progress).' : '')));
         grid.appendChild(block('Areas', (t.areas || []).join(', '))); grid.appendChild(block('Branch', t.branch)); grid.appendChild(block('Timeline', `created ${ago(t.createdAt)} ago · updated ${ago(t.updatedAt)} ago${t.doneAt ? ' · done ' + ago(t.doneAt) + ' ago' : ''} · source ${t.source}`));
         td.appendChild(grid); dr.appendChild(td); tb.appendChild(dr);
       }
@@ -157,7 +163,7 @@
 
   function sendTickets(st, items) {
     if (!items.length) return flash(st, 'nothing to send');
-    const msg = `Tickets to analyze, from the Tickets tab in Mission Control:\n${items.map((t) => `- ${t.id} [${t.type}/${t.priority}] ${t.title}${t.body ? ' — ' + t.body.replace(/\s+/g, ' ').slice(0, 400) : ''}`).join('\n')}\nFollow the Tickets procedure in your rules: inspect the repo for each, then record risk, doability, effort, whether a migration, database update or heavy task is needed, affected areas, analysis and plan with mc-board.js ticket update. Then give me a comparison table and a recommended order. Do not start building yet.`;
+    const msg = `Tickets to analyze, from the Tickets tab in Mission Control:\n${items.map((t) => `- ${t.id} [${t.type}/${t.priority}] ${t.title}${t.body ? ' — ' + t.body.replace(/\s+/g, ' ').slice(0, 400) : ''}`).join('\n')}\nFollow the Tickets procedure in your rules: inspect the repo for each, then record risk, doability, effort, a delivery estimate (eta, calendar time to merged-and-live, with eta-notes explaining what it covers and assumes), whether a migration, database update or heavy task is needed, affected areas, analysis and plan with mc-board.js ticket update. Then give me a comparison table including the ETA and a recommended order. Do not start building yet.`;
     deliver(st, msg);
   }
   function sendTodos(st, items) {

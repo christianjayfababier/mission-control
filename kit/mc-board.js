@@ -8,7 +8,8 @@
    node mc-board.js ticket add "Title" ["Body"] [--type bug|feature|task] [--priority p1|p2|p3]
    node mc-board.js ticket update T-003 [--status new|analyzed|planned|in-progress|in-review|blocked|done]
         [--risk low|medium|high] [--doable yes|effort|no] [--effort "2d"] [--migration yes|no] [--db yes|no] [--heavy yes|no]
-        [--areas "auth,billing"] [--analysis "..."] [--plan "..."] [--pr <url>] [--branch <name>] [--title "..."] [--body "..."]
+        [--eta "3 days"] [--eta-notes "..."] [--areas "auth,billing"] [--analysis "..."] [--plan "..."] [--pr <url>] [--branch <name>] [--title "..."] [--body "..."]
+        (--status in-progress stamps startedAt and computes dueAt from the eta; the owner shows dueAt to the requester)
    node mc-board.js ticket done T-003 [--pr <url>]
    node mc-board.js todo list [--all]
    node mc-board.js todo add "text" [--owner orchestrator|worker|owner]
@@ -27,7 +28,7 @@ const os = require('os');
 const DIR = path.join(os.homedir(), '.claude', 'mission-control', 'boards');
 const args = process.argv.slice(2);
 const flags = {};
-for (let i = 0; i < args.length; i++) { if (args[i].startsWith('--')) { const k = args[i].slice(2); const v = args[i + 1] !== undefined && !String(args[i + 1]).startsWith('--') ? args[++i] : 'yes'; flags[k] = v; args.splice(i - 1, 2); i -= 2; } }
+for (let i = 0; i < args.length; i++) { if (!args[i].startsWith('--')) continue; const k = args[i].slice(2); const hasVal = args[i + 1] !== undefined && !String(args[i + 1]).startsWith('--'); flags[k] = hasVal ? args[i + 1] : 'yes'; args.splice(i, hasVal ? 2 : 1); i--; }
 const project = (flags.project || process.cwd()).replace(/[\\/]+$/, '');
 const key = project.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const FILE = path.join(DIR, key + '.json');
@@ -36,8 +37,10 @@ const pad = (n) => String(n).padStart(3, '0');
 
 function load() { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return { version: 1, project, tickets: [], todos: [], seq: { ticket: 0, todo: 0 } }; } }
 function save(b) { fs.mkdirSync(DIR, { recursive: true }); b.updatedAt = now(); fs.writeFileSync(FILE, JSON.stringify(b, null, 2)); }
+/** '2 hours' | '3 days' | '1-2 weeks' | '90 min' → milliseconds (upper bound of a range; business weeks = 5 working days). */
+function etaMs(text) { const m = /(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?\s*(min|minute|hour|hr|h|day|d|week|wk|w|month|mo)/i.exec(String(text)); if (!m) return 0; const n = Number(m[2] || m[1]); const u = m[3].toLowerCase(); const H = 3600e3; return u.startsWith('min') ? n * 60e3 : /^h/.test(u) ? n * H : /^d/.test(u) ? n * 24 * H : /^w/.test(u) ? n * 7 * 24 * H : n * 30 * 24 * H; }
 const yn = (v) => v === undefined ? undefined : /^(y|yes|true|1)$/i.test(v) ? true : /^(n|no|false|0)$/i.test(v) ? false : null;
-const row = (t) => `${t.id}  [${t.status}]  ${t.type}/${t.priority || 'p2'}  ${t.title}` + (t.risk ? `  · risk ${t.risk}` : '') + (t.doable ? ` · doable ${t.doable}` : '') + (t.effort ? ` · ${t.effort}` : '') + (t.migration ? ' · MIGRATION' : '') + (t.db ? ' · DB' : '') + (t.heavy ? ' · HEAVY' : '') + (t.pr ? `  ${t.pr}` : '');
+const row = (t) => `${t.id}  [${t.status}]  ${t.type}/${t.priority || 'p2'}  ${t.title}` + (t.risk ? `  · risk ${t.risk}` : '') + (t.doable ? ` · doable ${t.doable}` : '') + (t.effort ? ` · ${t.effort}` : '') + (t.eta ? ` · ETA ${t.eta}` : '') + (t.dueAt ? ` · due ${t.dueAt.slice(0, 16).replace('T', ' ')}` : '') + (t.migration ? ' · MIGRATION' : '') + (t.db ? ' · DB' : '') + (t.heavy ? ' · HEAVY' : '') + (t.pr ? `  ${t.pr}` : '');
 
 try {
   const [kind, cmd, a1, a2] = args;
@@ -47,11 +50,14 @@ try {
     else if (cmd === 'show') { const t = b.tickets.find((x) => x.id === a1); console.log(t ? JSON.stringify(t, null, 2) : 'not found'); }
     else if (cmd === 'add') {
       if (!a1) { console.log('usage: ticket add "Title" ["Body"] [--type bug|feature|task] [--priority p1|p2|p3]'); process.exit(0); }
-      b.seq.ticket++; const t = { id: 'T-' + pad(b.seq.ticket), title: String(a1).slice(0, 200), body: String(a2 || '').slice(0, 8000), type: flags.type || 'task', priority: flags.priority || 'p2', status: 'new', risk: null, doable: null, effort: null, migration: null, db: null, heavy: null, areas: [], analysis: '', plan: '', pr: '', branch: '', source: flags.source || 'orchestrator', createdAt: now(), updatedAt: now(), doneAt: null };
+      b.seq.ticket++; const t = { id: 'T-' + pad(b.seq.ticket), title: String(a1).slice(0, 200), body: String(a2 || '').slice(0, 8000), type: flags.type || 'task', priority: flags.priority || 'p2', status: 'new', risk: null, doable: null, effort: null, migration: null, db: null, heavy: null, areas: [], analysis: '', plan: '', eta: null, etaNotes: '', startedAt: null, dueAt: null, pr: '', branch: '', source: flags.source || 'orchestrator', createdAt: now(), updatedAt: now(), doneAt: null };
       b.tickets.push(t); save(b); console.log('added ' + t.id);
     } else if (cmd === 'update' || cmd === 'done') {
       const t = b.tickets.find((x) => x.id === a1); if (!t) { console.log('not found: ' + a1); process.exit(0); }
-      for (const k of ['status', 'risk', 'doable', 'effort', 'analysis', 'plan', 'pr', 'branch', 'title', 'body', 'type', 'priority']) if (flags[k] !== undefined) t[k] = String(flags[k]);
+      for (const k of ['status', 'risk', 'doable', 'effort', 'analysis', 'plan', 'pr', 'branch', 'title', 'body', 'type', 'priority', 'eta']) if (flags[k] !== undefined) t[k] = String(flags[k]);
+      if (flags['eta-notes'] !== undefined) t.etaNotes = String(flags['eta-notes']);
+      if (t.status === 'in-progress' && !t.startedAt) t.startedAt = now();
+      if (t.startedAt && t.eta) { const ms = etaMs(t.eta); t.dueAt = ms ? new Date(new Date(t.startedAt).getTime() + ms).toISOString() : t.dueAt; }
       for (const k of ['migration', 'db', 'heavy']) if (flags[k] !== undefined) t[k] = yn(flags[k]);
       if (flags.areas !== undefined) t.areas = String(flags.areas).split(',').map((s) => s.trim()).filter(Boolean);
       if (cmd === 'done') { t.status = 'done'; t.doneAt = now(); }

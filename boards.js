@@ -9,6 +9,8 @@ const path = require('path');
 
 const safeKey = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const now = () => new Date().toISOString();
+/** '2 hours' | '3 days' | '1-2 weeks' → ms (upper bound of a range). Kept in sync with kit/mc-board.js. */
+function etaMs(text) { const m = /(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?\s*(min|minute|hour|hr|h|day|d|week|wk|w|month|mo)/i.exec(String(text)); if (!m) return 0; const n = Number(m[2] || m[1]); const u = m[3].toLowerCase(); const H = 3600e3; return u.startsWith('min') ? n * 60e3 : /^h/.test(u) ? n * H : /^d/.test(u) ? n * 24 * H : /^w/.test(u) ? n * 7 * 24 * H : n * 30 * 24 * H; }
 const pad = (n) => String(n).padStart(3, '0');
 
 class Boards {
@@ -19,7 +21,7 @@ class Boards {
   save(p, b) { fs.mkdirSync(this.dir, { recursive: true }); b.updatedAt = now(); const f = this.file(p); fs.writeFileSync(f, JSON.stringify(b, null, 2)); try { this.mtimes.set(f, fs.statSync(f).mtimeMs); } catch { /* ignore */ } return b; }
   addTickets(p, items, source = 'owner') {
     const b = this.load(p);
-    for (const it of items) { b.seq.ticket++; b.tickets.push({ id: 'T-' + pad(b.seq.ticket), title: String(it.title || '').slice(0, 200), body: String(it.body || '').slice(0, 8000), type: it.type || 'task', priority: it.priority || 'p2', status: 'new', risk: null, doable: null, effort: null, migration: null, db: null, heavy: null, areas: [], analysis: '', plan: '', pr: '', branch: '', source, createdAt: now(), updatedAt: now(), doneAt: null }); }
+    for (const it of items) { b.seq.ticket++; b.tickets.push({ id: 'T-' + pad(b.seq.ticket), title: String(it.title || '').slice(0, 200), body: String(it.body || '').slice(0, 8000), type: it.type || 'task', priority: it.priority || 'p2', status: 'new', risk: null, doable: null, effort: null, migration: null, db: null, heavy: null, areas: [], analysis: '', plan: '', eta: null, etaNotes: '', startedAt: null, dueAt: null, pr: '', branch: '', source, createdAt: now(), updatedAt: now(), doneAt: null }); }
     return this.save(p, b);
   }
   addTodos(p, items, owner = 'owner') {
@@ -31,6 +33,7 @@ class Boards {
     const b = this.load(p); const list = kind === 'todo' ? b.todos : b.tickets;
     const it = list.find((x) => x.id === id); if (!it) return b;
     Object.assign(it, patch, { updatedAt: now() });
+    if (kind === 'ticket') { if (it.status === 'in-progress' && !it.startedAt) it.startedAt = now(); if (it.startedAt && it.eta) { const ms = etaMs(it.eta); if (ms) it.dueAt = new Date(new Date(it.startedAt).getTime() + ms).toISOString(); } }
     if (kind === 'ticket' && patch.status === 'done' && !it.doneAt) it.doneAt = now();
     if (kind === 'ticket' && patch.status && patch.status !== 'done') it.doneAt = null;
     if (kind === 'todo' && patch.done !== undefined) it.doneAt = patch.done ? now() : null;

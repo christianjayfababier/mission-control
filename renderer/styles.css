@@ -162,6 +162,8 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .bd-table .bd-type.bug { color: var(--red); } .bd-table .bd-type.feature { color: var(--green); } .bd-table .bd-type.task { color: var(--muted); }
 .bd-table .risk.high { color: var(--red); font-weight: 700; } .bd-table .risk.medium { color: var(--amber); } .bd-table .risk.low { color: var(--green); }
 .bd-table .tri.yes { color: var(--amber); font-weight: 600; }
+.bd-table .bd-eta { font-weight: 600; }
+.bd-table .bd-due.soon { color: var(--amber); } .bd-table .bd-due.overdue { color: var(--red); font-weight: 700; }
 .bd-status { background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; font-size: 11px; }
 .bd-actions .btn + .btn { margin-left: 4px; }
 .bd-detail td { white-space: normal; background: var(--bg-2); padding: 10px 14px 12px; }
