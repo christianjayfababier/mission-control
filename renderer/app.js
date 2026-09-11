@@ -581,9 +581,15 @@ function renderInbox(snap) {
     let card = box.querySelector(`[data-id="${n.id}"]`);
     if (card) continue; // cards are static once rendered; answers remove them
     card = el('div', 'note ' + n.type); card.dataset.id = n.id;
-    const top = el('div', 'note-top'); top.appendChild(el('span', 'note-type', n.type)); top.appendChild(el('span', null, n.projectName)); top.appendChild(el('span', null, '· ' + fmtAgo(Date.now() - new Date(n.ts).getTime()) + ' ago'));
-    top.appendChild(el('span', 'note-src', n.source === 'mission-control' ? '· PR watch' : '· orchestrator'));
+    // two fixed rows: type + source, then project + age. Neither ever wraps; the project name ellipsises.
+    const top = el('div', 'note-top');
+    top.appendChild(el('span', 'note-type', n.type));
+    top.appendChild(el('span', 'note-src', n.source === 'mission-control' ? 'PR watch' : 'orchestrator'));
     card.appendChild(top);
+    const meta = el('div', 'note-meta');
+    meta.appendChild(el('span', 'note-proj', n.projectName));
+    meta.appendChild(el('span', 'note-age', fmtAgo(Date.now() - new Date(n.ts).getTime()) + ' ago'));
+    card.appendChild(meta);
     const title = el('div', 'note-title', n.title);
     if (n.url) { title.classList.add('link'); title.title = n.url; title.onclick = () => window.mc.openUrl(n.url); }
     card.appendChild(title);
