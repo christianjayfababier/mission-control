@@ -7,7 +7,8 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "screenshot": "electron . --screenshot screenshot.png"
+    "screenshot": "electron . --screenshot screenshot.png",
+    "test": "node test/smoke.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

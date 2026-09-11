@@ -78,6 +78,23 @@ Mission Control.cmd   launcher
 
 State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds).
 
+## Tests
+
+`npm test` runs `test/smoke.js` (plain Node, no dependencies): it boots the app in screenshot mode into a
+throwaway Chromium profile, waits ~3.5 s (`SMOKE_WAIT` overrides), captures the window to a PNG in the
+system temp dir, and fails if Electron exits non-zero, the PNG is missing / tiny / not a PNG, or the
+renderer logged an error. In screenshot mode `main.js` forwards console errors, renderer crashes and
+preload failures as `RENDERER ERROR: ...` and exits 1, so the test catches things a human would otherwise
+only see by looking -- such as a `<dialog>` staying visible after close. About 10 s end to end.
+
+Known noise, not failures: with another Mission Control already running, Chromium prints *Unable to move
+the cache: Access is denied* / *Gpu Cache Creation failed*, and node-pty's conpty helper prints *Error:
+AttachConsole failed* at exit. The test filters those out.
+
+GitHub Actions runs `npm test` on windows-latest for every pull request and every push to `main`
+(`.github/workflows/smoke.yml`). CI does not rebuild node-pty for Electron, so terminals are unavailable
+there; the app tolerates that and the smoke test does not depend on them.
+
 ## Troubleshooting
 
 - **"Terminals are unavailable"**: node-pty's native binary did not load for this Electron version. Run `npx @electron/rebuild -f -w node-pty` in this folder (needs Visual Studio Build Tools with the C++ workload, present on this machine).

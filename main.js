@@ -26,6 +26,34 @@ const REGISTRY = path.join(DATA_DIR, 'projects.json');
 const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
 const SCREENSHOT_WAIT = (() => { const i = process.argv.indexOf('--wait'); return i >= 0 ? Number(process.argv[i + 1]) || 4500 : 4500; })();
+// Screenshot mode is the smoke test (test/smoke.js). Give it its own Chromium profile so it never
+// fights the cache of a Mission Control that is already running. setPath must happen before app ready.
+// DATA_DIR is untouched: the shot must show the real projects and boards.
+let rendererFailed = false, shotProfile = null;
+if (SCREENSHOT) {
+  try { shotProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-shot-')); app.setPath('userData', shotProfile); app.setPath('sessionData', shotProfile); }
+  catch (e) { console.error('screenshot profile', e && e.message); }
+}
+/** Screenshot mode only: bin this run's throwaway profile, and stale ones earlier runs could not delete. */
+function sweepShotProfiles() {
+  let names = []; try { names = fs.readdirSync(os.tmpdir()); } catch { return; }
+  for (const d of names) {
+    if (!d.startsWith('mc-shot-')) continue;
+    const dir = path.join(os.tmpdir(), d);
+    // leave alone anything a concurrent run may still be using
+    try { if (dir !== shotProfile && Date.now() - fs.statSync(dir).mtimeMs < 10 * 60 * 1000) continue; } catch { continue; }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* still in use; the next run gets it */ }
+  }
+}
+/** Screenshot mode only: print renderer problems where the smoke test can see them, and fail the run. */
+function rendererError(text) { rendererFailed = true; console.error('RENDERER ERROR: ' + String(text).replace(/[\r\n]+/g, ' ')); } // one line, so the test can grep for it
+function watchRendererErrors(wc) {
+  // Electron 38: the listener gets a details object ({ message, level, lineNumber, sourceId }); the old
+  // positional (level, message, line, sourceId) args are deprecated.
+  wc.on('console-message', (details) => { if (details && details.level === 'error') rendererError(`console ${details.sourceId || '?'}:${details.lineNumber || 0} ${details.message}`); });
+  wc.on('render-process-gone', (_e, details) => rendererError(`render process gone: ${details && details.reason} (exit ${details && details.exitCode})`));
+  wc.on('preload-error', (_e, preloadPath, error) => rendererError(`preload ${preloadPath}: ${(error && error.stack) || error}`));
+}
 // Orchestrator rules: appended to the lead session's system prompt (claude --append-system-prompt-file).
 // The default ships in ./kit; the copy under DATA_DIR is the one that is used, so the owner can edit it.
 const KIT_DIR = path.join(__dirname, 'kit');
@@ -118,6 +146,7 @@ function createWindow() {
     backgroundColor: '#0d1117', title: 'Mission Control', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
+  if (SCREENSHOT) watchRendererErrors(win.webContents);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
@@ -125,9 +154,21 @@ function createWindow() {
     win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT });
     sendSnapshot();
     if (SCREENSHOT) setTimeout(async () => {
-      try { const img = await win.webContents.capturePage(); fs.writeFileSync(path.resolve(SCREENSHOT), img.toPNG()); console.log('screenshot written', path.resolve(SCREENSHOT)); }
-      catch (e) { console.error('screenshot failed', e); }
-      killAllPtys(); watcher.stop(); app.exit(0);
+      let shotFailed = false;
+      try {
+        // An occluded or not-yet-composited window captures as an empty image (seen roughly 1 run in 6),
+        // which would make the smoke test flaky. Retry until there are real pixels.
+        let buf = null;
+        for (let i = 0; i < 10 && !(buf && buf.length > 1024); i++) {
+          if (i) await new Promise((r) => setTimeout(r, 300));
+          const img = await win.webContents.capturePage();
+          buf = img.isEmpty() ? null : img.toPNG();
+        }
+        if (!buf || !buf.length) throw new Error('capturePage kept returning an empty image');
+        fs.writeFileSync(path.resolve(SCREENSHOT), buf); console.log('screenshot written', path.resolve(SCREENSHOT));
+      }
+      catch (e) { shotFailed = true; console.error('screenshot failed', e); }
+      killAllPtys(); watcher.stop(); sweepShotProfiles(); app.exit(rendererFailed || shotFailed ? 1 : 0); // the PNG is written either way, so a human can look
     }, SCREENSHOT_WAIT);
   });
 }
