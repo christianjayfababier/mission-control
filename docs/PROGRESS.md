@@ -9,6 +9,6 @@ Mirror of the Tickets board with evidence. Updated 2026-09-12 by Skye.
 | T-003 mc-board.js flags without a value | done | main @ 2156de2 | commit 2156de2 |
 | T-004 Recall and Handover in the kit | in review | [PR #2](https://github.com/christianjayfababier/mission-control/pull/2) | grep shows only the ignore rule mentions standup/wrapup |
 | T-005 Sidebar keeps seen projects | in review | feat/sidebar-workers-hygiene | lead screenshot `--view idle`: Active 1, Idle 5 incl. three ALD worktrees |
-| T-006 Finished workers list | in review | feat/sidebar-workers-hygiene | lead screenshot `--view workers`: 4 finished rows, resumable badge, Copy id; agent id equals Agent-tool id |
+| T-006 Finished workers list | reverted | feat/sidebar-workers-hygiene | built, then reverted 2026-09-12 at the owner's request; original panes and header checkbox kept; resume detection kept |
 | T-007 Smoke test and workflow | in review | [PR #1](https://github.com/christianjayfababier/mission-control/pull/1) | `npm test` exit 0 (builder 6 runs, lead 1); injected renderer error exits 1; CI green on windows-latest |
 | T-008 Repo scaffold | in review | [PR #2](https://github.com/christianjayfababier/mission-control/pull/2) | files present |
