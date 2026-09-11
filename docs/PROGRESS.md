@@ -13,6 +13,9 @@ Mirror of the Tickets board with evidence. Updated 2026-09-12 (evening) by Skye.
 | T-007 Smoke test and workflow | done | [PR #1](https://github.com/christianjayfababier/mission-control/pull/1) merged 6134210 | `npm test` exit 0; injected renderer error exits 1; CI green on windows-latest in 53 s |
 | T-008 Repo scaffold | done | [PR #2](https://github.com/christianjayfababier/mission-control/pull/2) merged | CLAUDE.md, docs/PLAN.md, docs/PROGRESS.md present |
 | T-009 False post-merge blocker on cancelled runs | done | [PR #4](https://github.com/christianjayfababier/mission-control/pull/4) merged e6f1ea5 | test/unit.js 5 checks; workflow cancels in-progress runs on PRs only |
-| T-010 Explorer panel | in progress | feat/explorer-ui | |
-| T-011 Explorer data and IPC | in progress | feat/explorer-data | |
-| T-012 Explorer Branches view | planned | feat/explorer-ui | |
+| T-010 Explorer panel | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) merged 06123ad | lead screenshot `--view explorer`: pills on three files |
+| T-011 Explorer data and IPC | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) | 10 unit checks; git status on the ALD repo 71-159 ms |
+| T-012 Explorer Branches view | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) merged 06123ad | lead screenshot `--view explorer-branches` |
+| T-013 Rules data and IPC | in progress | feat/rules-data | |
+| T-014 Rules tab UI | in progress | feat/rules-ui | |
+| T-015 Kit paragraph and README | planned | feat/rules-ui | |

@@ -16,27 +16,39 @@
    node mc-board.js todo done D-002
    node mc-board.js todo remove D-002
    node mc-board.js watch add <pr number|url> [--ticket T-003]   # Mission Control follows the PR: checks → merge reminder → merge → deployment, into the owner's inbox
+   node mc-board.js rule list
+   node mc-board.js rule add "text" [--by Skye]      # the owner's standing rules for this project; --by defaults to 'orchestrator'
+   node mc-board.js rule remove R-003
+        (rules are appended to this project's lead system prompt at its next launch; the owner sees and edits them in the Rules tab)
 
- Board file: ~/.claude/mission-control/boards/<project-key>.json (project = --project <path> or the current
- directory). Mission Control shows changes within two seconds. Exit code is always 0.
+ Board file: ~/.claude/mission-control/boards/<project-key>.json, rules file
+ ~/.claude/mission-control/rules/<project-key>.json (project = --project <path> or the current directory).
+ Set MC_DATA_DIR to point both somewhere else (tests only; unset it and the real data dir is used).
+ Mission Control shows changes within two seconds. Exit code is always 0.
 */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const DIR = path.join(os.homedir(), '.claude', 'mission-control', 'boards');
+const ROOT = process.env.MC_DATA_DIR || path.join(os.homedir(), '.claude', 'mission-control');
+const DIR = path.join(ROOT, 'boards');
+const RULES_DIR = path.join(ROOT, 'rules');
 const args = process.argv.slice(2);
 const flags = {};
 for (let i = 0; i < args.length; i++) { if (!args[i].startsWith('--')) continue; const k = args[i].slice(2); const hasVal = args[i + 1] !== undefined && !String(args[i + 1]).startsWith('--'); flags[k] = hasVal ? args[i + 1] : 'yes'; args.splice(i, hasVal ? 2 : 1); i--; }
 const project = (flags.project || process.cwd()).replace(/[\\/]+$/, '');
 const key = project.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const FILE = path.join(DIR, key + '.json');
+const RULES_FILE = path.join(RULES_DIR, key + '.json');
 const now = () => new Date().toISOString();
 const pad = (n) => String(n).padStart(3, '0');
 
 function load() { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return { version: 1, project, tickets: [], todos: [], seq: { ticket: 0, todo: 0 } }; } }
 function save(b) { fs.mkdirSync(DIR, { recursive: true }); b.updatedAt = now(); fs.writeFileSync(FILE, JSON.stringify(b, null, 2)); }
+// the Rules tab's file: same id scheme (R-001...), same whole-file write, read by rules.js in the app
+function loadRules() { try { const r = JSON.parse(fs.readFileSync(RULES_FILE, 'utf8')); r.rules = Array.isArray(r.rules) ? r.rules : []; r.seq = Number(r.seq) || r.rules.length; return r; } catch { return { version: 1, project, seq: 0, rules: [] }; } }
+function saveRules(r) { fs.mkdirSync(RULES_DIR, { recursive: true }); r.project = r.project || project; r.updatedAt = now(); fs.writeFileSync(RULES_FILE, JSON.stringify(r, null, 2)); }
 /** '2 hours' | '3 days' | '1-2 weeks' | '90 min' → milliseconds (upper bound of a range; business weeks = 5 working days). */
 function etaMs(text) { const m = /(\d+(?:\.\d+)?)(?:\s*[-–]\s*(\d+(?:\.\d+)?))?\s*(min|minute|hour|hr|h|day|d|week|wk|w|month|mo)/i.exec(String(text)); if (!m) return 0; const n = Number(m[2] || m[1]); const u = m[3].toLowerCase(); const H = 3600e3; return u.startsWith('min') ? n * 60e3 : /^h/.test(u) ? n * H : /^d/.test(u) ? n * 24 * H : /^w/.test(u) ? n * 7 * 24 * H : n * 30 * 24 * H; }
 const yn = (v) => v === undefined ? undefined : /^(y|yes|true|1)$/i.test(v) ? true : /^(n|no|false|0)$/i.test(v) ? false : null;
@@ -78,6 +90,19 @@ try {
     else if (cmd === 'remove' && num) { b.watches = b.watches.filter((w) => w.pr !== num); save(b); console.log('removed watch for PR #' + num); }
     else if (cmd === 'list') console.log(b.watches.length ? b.watches.map((w) => `PR #${w.pr}${w.ticket ? ' (' + w.ticket + ')' : ''} since ${w.since}`).join('\n') : 'no watches');
     else console.log('usage: watch add <pr number|url> [--ticket T-003] | watch remove <pr> | watch list');
-  } else console.log('usage: mc-board.js ticket ... | todo ... | watch ...   (see header of this file)');
+  } else if (kind === 'rule') {
+    const r = loadRules();
+    if (cmd === 'list') console.log(r.rules.length ? r.rules.map((x) => `${x.id}  ${x.text}  (${x.by})`).join('\n') : 'no rules');
+    else if (cmd === 'add') {
+      const text = String(a1 || '').trim();
+      if (!text) { console.log('usage: rule add "text" [--by Skye]'); process.exit(0); }
+      r.seq++; const x = { id: 'R-' + pad(r.seq), text: text.slice(0, 2000), by: String(flags.by || 'orchestrator'), source: 'script', createdAt: now(), updatedAt: now(), order: r.rules.length };
+      r.rules.push(x); saveRules(r); console.log('added ' + x.id);
+    } else if (cmd === 'remove') {
+      const i = r.rules.findIndex((x) => x.id === a1);
+      if (i < 0) { console.log('not found: ' + a1); process.exit(0); }
+      r.rules.splice(i, 1); r.rules.forEach((x, n) => { x.order = n; }); saveRules(r); console.log('removed ' + a1);
+    } else console.log('usage: rule list | rule add "text" [--by Skye] | rule remove R-003');
+  } else console.log('usage: mc-board.js ticket ... | todo ... | watch ... | rule ...   (see header of this file)');
 } catch (e) { console.log('mc-board: ' + (e && e.message)); }
 process.exit(0);

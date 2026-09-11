@@ -13,6 +13,7 @@ const { TranscriptWatcher } = require('./transcripts');
 const { CheckpointWriter } = require('./checkpoint');
 const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
 const { Boards } = require('./boards');
+const { Rules, renderOwnerRules, sources: ruleSources, readText: readRuleText } = require('./rules');
 const { PrWatch } = require('./prwatch');
 const explorer = require('./explorer');
 const team = require('./team');
@@ -75,6 +76,7 @@ const settings = new Settings(path.join(DATA_DIR, 'project-settings.json'));
 const github = new GitHub();
 const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
 const boards = new Boards(path.join(DATA_DIR, 'boards'));
+const rules = new Rules(path.join(DATA_DIR, 'rules'));
 const BOARD_SCRIPT = path.join(DATA_DIR, 'mc-board.js');
 const gitCache = new Map(); // project key -> { remote, branch, at }
 const prCache = new Map();  // project key -> { prs, error, at }
@@ -149,6 +151,7 @@ function enrich(snap) {
     p.inflight = p.repo ? prwatch.inflight(p.repo.full) : [];
     p.notes = notes.forProject(p.path);
     p.boardCounts = boards.counts(p.path);
+    p.ruleCount = rules.count(p.path);   // Rules tab badge; read every time on purpose: same-millisecond writes share an mtime, so a cache showed a stale badge
   }
   snap.openNotes = notes.open().length;
   return snap;
@@ -240,13 +243,32 @@ function journalBoardDiff(b) {
   }
   boardSeen.set(k, cur);
 }
-setInterval(() => { const changed = boards.poll(); if (changed.length) { for (const b of changed) journalBoardDiff(b); if (win && !win.isDestroyed()) { for (const b of changed) win.webContents.send('board', b); sendSnapshot(); } } }, 2000);
+setInterval(() => {
+  const changed = boards.poll(); if (changed.length) { for (const b of changed) journalBoardDiff(b); if (win && !win.isDestroyed()) { for (const b of changed) win.webContents.send('board', b); sendSnapshot(); } }
+  // the same cadence for the owner's rules: kit/mc-board.js writes that file too (docs/RULES-CONTRACT.md)
+  const rulesChanged = rules.poll(); if (rulesChanged.length && win && !win.isDestroyed()) for (const r of rulesChanged) win.webContents.send('rules', { path: r.project, rules: r });
+}, 2000);
 
 // ── tickets & todos board
 ipcMain.handle('board:get', (_e, p) => boards.load(p));
 ipcMain.handle('board:add', (_e, { path: p, kind, items }) => { checkpoints.journal(p, `board · owner added ${items.length} ${kind}${items.length === 1 ? '' : 's'}: ${items.map((i) => typeof i === 'string' ? i : i.title).join('; ').slice(0, 200)}`); return kind === 'todo' ? boards.addTodos(p, items, 'owner') : boards.addTickets(p, items, 'owner'); });
 ipcMain.handle('board:patch', (_e, { path: p, kind, id, patch }) => { const b = boards.patch(p, kind, id, patch); const it = (kind === 'todo' ? b.todos : b.tickets).find((x) => x.id === id); if (it && (patch.status || patch.done !== undefined)) checkpoints.journal(p, `board · owner marked ${id} ${patch.status || (patch.done ? 'done' : 'reopened')}: ${it.title || it.text}`); return b; });
 ipcMain.handle('board:remove', (_e, { path: p, kind, id }) => boards.remove(p, kind, id));
+
+// ── owner rules per project (docs/RULES-CONTRACT.md). The same file is written by kit/mc-board.js.
+ipcMain.handle('rules:get', (_e, p) => rules.load(p));
+ipcMain.handle('rules:add', (_e, { path: p, text }) => { const before = rules.load(p).rules.length; const r = rules.add(p, text, 'owner', 'ui'); const added = r.rules.length > before ? r.rules[r.rules.length - 1] : null; if (added) checkpoints.journal(p, `rules · owner added ${added.id}: ${added.text.slice(0, 200)}`); return r; });
+ipcMain.handle('rules:patch', (_e, { path: p, id, patch }) => rules.patch(p, id, patch || {}));
+ipcMain.handle('rules:remove', (_e, { path: p, id }) => { const before = rules.load(p).rules.find((x) => x.id === id); const r = rules.remove(p, id); if (before) checkpoints.journal(p, `rules · owner removed ${before.id}: ${String(before.text || '').slice(0, 200)}`); return r; });
+ipcMain.handle('rules:reorder', (_e, { path: p, ids }) => rules.reorder(p, ids));
+ipcMain.handle('rules:sources', (_e, p) => ruleSources(p, { kitFile: KIT_FILE, kitLocal: KIT_LOCAL, generatedDir: path.join(DATA_DIR, 'generated'), key: keyOf(p) }));
+// The viewer reads only inside a known project, the two kit files, or DATA_DIR/generated — nothing else in
+// DATA_DIR (tokens live in project-settings.json). `project` is optional; the registry covers the one-arg call.
+function readerRoots(project) {
+  const known = [...registry().map((x) => x.path), ...seenList().map((x) => x.path)].filter(Boolean);
+  return [KIT_FILE, KIT_LOCAL, path.join(DATA_DIR, 'generated'), ...(project ? [project] : []), ...known];
+}
+ipcMain.handle('rules:read', (_e, arg) => { const p = typeof arg === 'string' ? arg : (arg && arg.path); const project = typeof arg === 'object' && arg ? arg.project : null; return readRuleText(p, readerRoots(project)); });
 
 // ── repo, GitHub account, git identity per project
 ipcMain.handle('gh:accounts', () => github.listAccounts(true));
@@ -290,6 +312,7 @@ ipcMain.handle('lead:prepare', async (_e, arg) => {
   const repo = parseRepo(s.repo || g.remote);
   const account = await effectiveAccount(s, g.remote);
   if (account && !s.ghAccount) { const u = await github.user(account); if (u) Object.assign(s, { ghAccount: account, gitName: s.gitName || u.name, gitEmail: s.gitEmail || u.email, inferred: true }); }
+  const ownerRules = renderOwnerRules(rules.load(p));
   const base = fs.readFileSync(KIT_FILE, 'utf8');
   let local = ''; try { local = fs.readFileSync(KIT_LOCAL, 'utf8'); } catch { local = ''; }
   const ctx = [
@@ -303,6 +326,8 @@ ipcMain.handle('lead:prepare', async (_e, arg) => {
     `- Inbox script: node "${NOTE_SCRIPT}" (see the Inbox section of your rules). Mission Control's owner reads that inbox.`,
     `- Tickets & todos board: node "${BOARD_SCRIPT}" (see the Tickets section of your rules). The owner sees it in the Tickets and Todos tabs.`,
     '',
+    // the owner's rules for this project, between the project block and the model assignments (docs/RULES-CONTRACT.md)
+    ...(ownerRules ? [ownerRules, ''] : []),
     '## Model assignments for workers (owner-controlled in Mission Control → Team & models)',
     'Dispatch each role at the model and effort below: custom roles carry them in their .claude/agents frontmatter already; for built-in types pass the model with the Agent tool. "recommended" means the owner has not overridden Mission Control\'s recommendation. Escalation of a stuck worker to fable stays allowed per your rules.',
     ...team.roster(p, s.models || {}).map((r) => `- ${r.name}: ${r.model || r.recommended.model}${r.effort || r.recommended.effort ? ' / ' + (r.effort || r.recommended.effort) : ''}${r.model ? (r.source === 'agent' ? ' (agent file)' : ' (owner-set)') : ' (recommended)'}`),

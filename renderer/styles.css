@@ -187,6 +187,70 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .todo-text { flex: 1; white-space: pre-wrap; word-break: break-word; }
 .small { font-size: 11px; }
 
+/* ── Rules tab: the repo’s rule files, Mission Control’s rulebook, and the owner’s rules for the project */
+.pane.rules.active { display: flex; flex-direction: column; overflow: hidden; }
+.rl-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-2); font-size: 12px; flex: none; }
+.rl-body { flex: 1; min-height: 0; display: flex; }
+.rl-list { flex: 1; min-width: 0; overflow-y: auto; padding: 8px 0 16px; }
+.rl-sec { border-bottom: 1px solid var(--line); }
+.rl-sec-head { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; cursor: pointer; user-select: none; }
+.rl-sec-head:hover { background: var(--bg-2); }
+.rl-sec-head .caret { color: var(--muted); width: 10px; }
+.rl-sec-title { font-weight: 700; }
+.rl-sec-hint { font-size: 11px; }
+.rl-sec-body { padding: 0 12px 12px 30px; }
+.rl-group { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 8px 0 3px; }
+.rl-row { display: flex; gap: 10px; align-items: baseline; padding: 4px 8px; border-radius: 6px; cursor: pointer; }
+.rl-row:hover { background: var(--bg-2); }
+.rl-row.sel { background: var(--bg-3); box-shadow: inset 2px 0 0 var(--accent); }
+.rl-row.missing { cursor: default; opacity: .45; }
+.rl-row.missing:hover { background: none; }
+.rl-rel { flex: none; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-first { flex: 1; min-width: 0; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-size { flex: none; font-size: 11px; font-family: var(--mono); }
+.rl-empty { color: var(--muted); padding: 10px 8px; line-height: 1.6; max-width: 70ch; }
+.rl-note { font-size: 11px; padding: 10px 8px 0; line-height: 1.5; }
+
+/* the owner’s rules */
+.rl-add { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 10px; }
+.rl-add textarea { flex: 1; resize: vertical; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-family: var(--sans); font-size: 12px; line-height: 1.5; }
+.rl-add textarea:focus { outline: none; border-color: var(--accent); }
+.rl-rule { display: flex; gap: 10px; align-items: flex-start; padding: 6px 8px; border-radius: 6px; }
+.rl-rule:hover { background: var(--bg-2); }
+.rl-ord { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.rl-ord .btn { padding: 0 5px; line-height: 1.4; }
+.rl-ord .btn:disabled { opacity: .3; cursor: default; }
+.rl-rule-mid { flex: 1; min-width: 0; }
+.rl-rule-text { white-space: pre-wrap; word-break: break-word; line-height: 1.55; cursor: text; }
+.rl-rule-text:hover { color: var(--accent); }
+.rl-edit { width: 100%; resize: vertical; background: var(--bg); color: var(--ink); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; font-family: var(--sans); font-size: 13px; line-height: 1.55; }
+.rl-edit:focus { outline: none; }
+.rl-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; margin-top: 3px; }
+.rl-rule-acts { flex: none; display: flex; gap: 4px; align-items: center; }
+.rl-rule-acts .btn:disabled { opacity: .4; cursor: default; }
+
+/* the viewer, on the right half */
+.rl-viewer { flex: 0 0 50%; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-2); }
+.rl-vhead { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.rl-vname { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-vspacer { flex: 1; }
+.rl-vpath { flex: none; padding: 4px 10px; font-size: 11px; border-bottom: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rl-vbody { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px 24px; line-height: 1.6; }
+.rl-vbody p { margin: 0 0 10px; white-space: pre-wrap; word-break: break-word; }
+.rl-vbody .rl-h { margin: 16px 0 6px; line-height: 1.3; }
+.rl-vbody h1.rl-h { font-size: 17px; } .rl-vbody h2.rl-h { font-size: 15px; } .rl-vbody h3.rl-h { font-size: 13px; }
+.rl-vbody h4.rl-h, .rl-vbody h5.rl-h, .rl-vbody h6.rl-h { font-size: 12px; color: var(--muted); }
+.rl-vbody > .rl-h:first-child { margin-top: 0; }
+.rl-vbody .rl-ul { margin: 0 0 10px; padding-left: 20px; }
+.rl-vbody li { margin: 2px 0; }
+.rl-vbody .rl-code { margin: 0 0 10px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
+.rl-vbody .rl-code code { background: none; padding: 0; font-size: 11.5px; line-height: 1.5; white-space: pre; }
+.rl-vbody .rl-table code { font-size: 11px; }
+.rl-vbody .rl-hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+.rl-vbody code { font-size: 12px; }
+.rl-vbody b { color: #f0f6fc; }
+
+
 /* ── settings dialog */
 .dlg { background: var(--bg-2); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; width: min(620px, 92vw); }
 .dlg::backdrop { background: rgba(0,0,0,.55); }

@@ -37,6 +37,21 @@ Integration: when B is done, A merges `feat/explorer-data` into `feat/explorer-u
 after QA and the owner's look at a demo window. Decisions: reads count as "working on" but drawn hollow; panel width
 fixed at 280px; no new dependencies; shell edits are invisible and the UI says so.
 
+## Work items (2026-09-12, night): Rules tab (approved by the owner)
+A **Rules** tab after Tickets and Todos: the repo's rule files the Recall reads (read-only, viewable), Mission Control's
+rulebook and the owner's global additions, and per-project owner rules that are appended to the lead's generated prompt
+at launch. Contract: `docs/RULES-CONTRACT.md`.
+
+| Ticket | Item | Branch | Owner | Done when |
+| --- | --- | --- | --- | --- |
+| T-013 | Rules store, IPC, repo rule-file discovery, prompt injection, `mc-board.js rule`, unit tests | `feat/rules-data` | opus builder B | `npm test` green with checks for discovery, renderOwnerRules and CLI; a generated prompt contains the owner rules |
+| T-014 | Rules tab UI: three sections, viewer, add/edit/remove/reorder, Tell the lead now | `feat/rules-ui` | opus builder A | Screenshot `--view rules` shows all three sections on this repo with one owner rule |
+| T-015 | Kit paragraph (save owner rules on request, obey the Owner rules section) and README | `feat/rules-ui` | Skye | Kit text present; README describes the tab |
+
+Integration as for the Explorer: A merges `feat/rules-data`, one PR from `feat/rules-ui` after QA and the owner's look.
+Decisions: repo rule files are read-only in the tab; rules are plain text; per-project only (global rules live in
+`orchestrator-system.local.md`, which the tab shows and opens).
+
 ## Non-goals
 No new dependencies. No redesign of the terminal panes. No change to the checkpoint or journal
 format. No automatic merging.
