@@ -11,7 +11,7 @@ button, input, label { font: inherit; color: inherit; }
 code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border-radius: 3px; }
 .muted { color: var(--muted); }
 
-#app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
+#app { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100vh; }
 
 /* ── sidebar */
 #sidebar { background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
@@ -51,21 +51,23 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 
 /* ── body */
-#body { display: grid; grid-template-rows: auto minmax(160px, var(--orch-h, 46%)) 6px 1fr; min-height: 0; height: 100vh; }
+/* min-width/columns keep the right column inside the window: without them a wide child (the PR strip)
+   grows #body past the viewport and pushes the header buttons and the orchestrator pane off-screen. */
+#body { display: grid; grid-template-rows: auto minmax(160px, var(--orch-h, 46%)) 6px 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; height: 100vh; }
 .proj-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg-2); gap: 12px; }
 .ph-title h1 { font-size: 15px; margin: 0; font-weight: 700; }
 .ph-path { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 2px; }
 .ph-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 
 /* ── orchestrator area */
-.orch { display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.orch { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
 .tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); background: var(--bg-2); overflow-x: auto; }
 .tab { padding: 6px 12px; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; cursor: pointer; color: var(--muted); white-space: nowrap; display: flex; gap: 8px; align-items: center; }
 .tab.active { background: var(--bg); color: var(--ink); border-color: var(--line); }
 .tab .x { opacity: .5; } .tab .x:hover { opacity: 1; color: var(--red); }
 .tab .st { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .tab .st.working, .tab .st.live { background: var(--green); } .tab .st.waiting { background: var(--amber); }
-.orch-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.orch-body { position: relative; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .pane { position: absolute; inset: 0; display: none; overflow: hidden; }
 .pane.active { display: block; }
 .pane.sess.active { display: flex; flex-direction: column; }
@@ -114,7 +116,7 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .note-title.link { cursor: pointer; } .note-title.link:hover { color: var(--accent); }
 
 /* ── pull requests strip above the workers */
-.pr-strip { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); overflow-x: auto; background: var(--bg-2); flex: none; }
+.pr-strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--line); overflow: hidden; background: var(--bg-2); flex: none; min-width: 0; }
 .pr-chip { display: inline-flex; gap: 7px; align-items: center; white-space: nowrap; font-size: 12px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); cursor: pointer; }
 .pr-chip:hover { border-color: #3d4a5e; }
 .pr-chip .n { color: var(--accent); font-weight: 600; }
@@ -124,6 +126,7 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .pr-chip .ck.pass { color: var(--green); } .pr-chip .ck.fail { color: var(--red); } .pr-chip .ck.pending { color: var(--amber); }
 .pr-chip.draft { opacity: .7; }
 .pr-chip.err { border-color: #5a2a2a; color: var(--red); cursor: default; }
+.pr-chip.more { color: var(--muted); font-weight: 600; }
 .wk-meta a.pr-link { color: var(--accent); cursor: pointer; text-decoration: none; }
 .wk-meta .branch { font-family: var(--mono); }
 
@@ -285,7 +288,7 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .splitter:hover { background: #3d4a5e; }
 
 /* ── workers */
-.workers { display: flex; flex-direction: column; min-height: 0; background: var(--bg-2); }
+.workers { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg-2); }
 .workers-head { display: flex; justify-content: space-between; padding: 6px 12px; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
 .grid { flex: 1; min-height: 0; overflow: auto; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); grid-auto-rows: minmax(220px, 1fr); gap: 8px; }
 .grid.max { grid-template-columns: 1fr; grid-auto-rows: 1fr; }

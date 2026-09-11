@@ -489,7 +489,11 @@ function renderPrStrip(p) {
   const show = p && p.repo && ((p.prs && p.prs.length) || p.prsError);
   strip.hidden = !show; if (!show) return;
   if (p.prsError) strip.appendChild(el('span', 'pr-chip err', 'PRs: ' + p.prsError));
-  for (const pr of p.prs || []) {
+  const all = p.prs || [];
+  const chips = [];
+  let rest = 0;
+  for (const pr of all) {
+    if (chips.length >= 24) { rest++; continue; }   // hard ceiling: two rows never hold more than this
     const chip = el('span', 'pr-chip' + (pr.draft ? ' draft' : '')); chip.title = `${pr.title}\n${pr.url}\nby ${pr.author || '?'} · ${pr.review || 'no review yet'}`;
     chip.appendChild(el('span', 'n', `#${pr.number}`)); chip.appendChild(el('span', null, pr.title.slice(0, 48) + (pr.draft ? ' (draft)' : '')));
     chip.appendChild(el('span', 'b', pr.branch));
@@ -498,8 +502,18 @@ function renderPrStrip(p) {
     if (pr.review === 'APPROVED') chip.appendChild(el('span', 'ck pass', 'approved')); else if (pr.review === 'CHANGES_REQUESTED') chip.appendChild(el('span', 'ck fail', 'changes requested'));
     const who = (p.workers || []).filter((w) => w.gitBranch === pr.branch).map((w) => w.role + (w.status === 'running' ? ' ●' : ''));
     if (who.length) chip.appendChild(el('span', 'who', who.join(', ')));
-    chip.onclick = () => window.mc.openUrl(pr.url); strip.appendChild(chip);
+    chip.onclick = () => window.mc.openUrl(pr.url); strip.appendChild(chip); chips.push(chip);
   }
+  // The strip wraps but never grows past two rows: whatever does not fit becomes a "+N more" chip
+  // that opens the repository's pull request list.
+  const more = el('span', 'pr-chip more');
+  more.title = `All ${all.length} open pull requests on ${p.repo.full}`;
+  more.onclick = () => window.mc.openUrl(p.repo.url + '/pulls');
+  const showMore = () => { more.textContent = `+${rest} more`; if (!more.isConnected) strip.appendChild(more); };
+  const rowsUsed = () => { const tops = []; for (const c of strip.children) if (!tops.includes(c.offsetTop)) tops.push(c.offsetTop); return tops.length; };
+  if (rest) showMore();
+  if (strip.clientWidth > 0) { for (let guard = chips.length; guard > 0 && rowsUsed() > 2; guard--) { const c = chips.pop(); if (!c) break; c.remove(); rest++; showMore(); } }
+  else while (chips.length > 8) { chips.pop().remove(); rest++; showMore(); }   // not laid out yet (hidden view): fall back to a fixed cap
 }
 // settings dialog
 (() => {
