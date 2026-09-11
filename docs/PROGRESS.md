@@ -1,6 +1,6 @@
 # Progress — Mission Control
 
-Mirror of the Tickets board with evidence. Updated 2026-09-12 (evening) by Skye.
+Mirror of the Tickets board with evidence. Updated 2026-09-12 (morning, after PR #6) by Skye.
 
 | Ticket | Status | Branch / PR | Evidence |
 | --- | --- | --- | --- |
@@ -16,6 +16,8 @@ Mirror of the Tickets board with evidence. Updated 2026-09-12 (evening) by Skye.
 | T-010 Explorer panel | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) merged 06123ad | lead screenshot `--view explorer`: pills on three files |
 | T-011 Explorer data and IPC | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) | 10 unit checks; git status on the ALD repo 71-159 ms |
 | T-012 Explorer Branches view | done | [PR #5](https://github.com/christianjayfababier/mission-control/pull/5) merged 06123ad | lead screenshot `--view explorer-branches` |
-| T-013 Rules data and IPC | in progress | feat/rules-data | |
-| T-014 Rules tab UI | in progress | feat/rules-ui | |
-| T-015 Kit paragraph and README | planned | feat/rules-ui | |
+| T-013 Rules data and IPC | done | [PR #6](https://github.com/christianjayfababier/mission-control/pull/6) merged 52d7a3f | 16 unit checks; generated prompt gains the Owner rules section only when rules exist |
+| T-014 Rules tab UI | done | [PR #6](https://github.com/christianjayfababier/mission-control/pull/6) merged 52d7a3f | lead screenshot `--view rules`: three sections and the viewer; numbered-list fix 88c7dce |
+| T-015 Kit paragraph and README | done | [PR #6](https://github.com/christianjayfababier/mission-control/pull/6) merged 52d7a3f | kit section 6d; README Rules paragraph |
+| T-016 PR strip pushes header and Orchestrator off-screen | in review | fix/t-016-pr-strip-overflow | CDP measurement: right column 7945px before, window width after, at 1600px and 3424px; strip wraps to two rows + "+N more"; re-measures on resize |
+| T-017 Sidebar horizontal scrollbar and inbox tag overflow | in review | fix/t-016-pr-strip-overflow | CDP measurement with injected 56-char name and 148-char title: no overflow, cards never shrink, Dismiss visible |
