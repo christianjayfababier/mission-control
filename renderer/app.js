@@ -659,4 +659,8 @@ window.mc.onSnapshot((snap) => {
   }
 });
 setInterval(() => { renderWorkers(); }, 1000);
+// The PR strip's two-row cap is measured against the strip's width, so a resize has to re-measure it:
+// without this it stays mis-wrapped (and can push the workers grid down) until the next snapshot tick.
+let prStripResize = null;
+window.addEventListener('resize', () => { clearTimeout(prStripResize); prStripResize = setTimeout(() => { const p = currentProject(); if (p) renderPrStrip(p); }, 150); });
 window.mc.snapshot().then((snap) => { state.snapshot = snap; renderSidebar(); if (state.selected) selectProject(state.selected); });
