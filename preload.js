@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('mc', {
   onEnv: on('env'),
   addProject: () => ipcRenderer.invoke('projects:add'),
   removeProject: (p) => ipcRenderer.invoke('projects:remove', p),
+  hideProject: (p) => ipcRenderer.invoke('projects:hide', p), // unpinned project: stays in seen-projects.json, leaves the sidebar
   openInCode: (p) => ipcRenderer.invoke('open:code', p),
   openFolder: (p) => ipcRenderer.invoke('open:folder', p),
   openPath: (p) => ipcRenderer.invoke('open:path', p),

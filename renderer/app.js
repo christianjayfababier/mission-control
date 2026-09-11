@@ -8,7 +8,8 @@ const fmtTok = (n) => !n ? '0' : n < 1000 ? String(n) : n < 1e6 ? (n / 1000).toF
 const clock = (ts) => new Date(ts).toTimeString().slice(0, 8);
 
 const state = {
-  env: { ptyAvailable: false }, snapshot: { projects: [] }, selected: null, showIdle: false, showFinished: true,
+  env: { ptyAvailable: false }, snapshot: { projects: [] }, selected: null, showFinished: true,
+  idleOpen: false,       // sidebar "Idle" group expanded? (remembered in localStorage)
   terms: new Map(),      // projectKey -> [{ptyId, term, fit, el, tab}]
   activeTab: new Map(),  // projectKey -> tab id ('pty1' | 'sess:<id>')
   panes: new Map(),      // paneId -> {el, body, lastSeq, kind, id}
@@ -20,33 +21,54 @@ const state = {
 };
 try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem('mc.lead') || '{}'))) state.lead.set(k, v); } catch { /* fresh */ }
 function saveLead() { try { localStorage.setItem('mc.lead', JSON.stringify(Object.fromEntries(state.lead))); } catch { /* ignore */ } }
+const prefGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch { return d; } };
+const prefSet = (k, v) => { try { localStorage.setItem(k, v ? '1' : '0'); } catch { /* ignore */ } };
+state.idleOpen = prefGet('mc.idleOpen', false);
 const termTheme = { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff', selectionBackground: '#264f78', black: '#0d1117', brightBlack: '#6e7681', red: '#ff7b72', green: '#3fb950', yellow: '#d29922', blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4', brightWhite: '#f0f6fc' };
 
 // ───────────── sidebar
-function visibleProjects() {
-  const list = state.snapshot.projects || [];
-  return state.showIdle ? list : list.filter((p) => p.pinned || p.live || p.running || p.waiting || Date.now() - p.lastActivity < 6 * 3600 * 1000);
+// Nothing is ever dropped: every project Mission Control has seen a session in stays in the list. The ones that are
+// quiet right now sit in a collapsed "Idle" group instead of disappearing (main.js remembers them in seen-projects.json).
+const ACTIVE_MS = 6 * 3600 * 1000;
+function isActiveProject(p) { return !!(p.live || p.running || p.waiting || (Date.now() - (p.lastActivity || 0) < ACTIVE_MS)); }
+function projectRow(p) {
+  const li = el('li', 'proj' + (p.key === state.selected ? ' sel' : ''));
+  li.appendChild(el('span', 'dot' + (p.live ? ' live' : p.waiting ? ' waiting' : '')));
+  const mid = el('div'); mid.appendChild(el('div', 'proj-name', p.name)); mid.appendChild(el('div', 'proj-path', p.path || ('~/.claude/projects/' + p.slug)));
+  li.appendChild(mid);
+  const b = el('div', 'proj-badges');
+  if (p.live) b.appendChild(el('span', 'badge live', p.live + ' live'));
+  if (p.running) b.appendChild(el('span', 'badge run', p.running + ' running'));
+  if (!p.live && !p.running) b.appendChild(el('span', 'badge', p.lastActivity ? fmtAgo(Date.now() - p.lastActivity) : p.pinned ? 'pinned' : 'seen'));
+  li.appendChild(b);
+  li.title = (p.path || '') + (p.pinned ? '\nAdded by you · right-click to remove from the sidebar' : p.seen ? '\nRemembered from an earlier session · right-click to hide' : '');
+  li.onclick = () => selectProject(p.key);
+  li.oncontextmenu = (e) => {
+    e.preventDefault();
+    if (p.pinned) { if (confirm(`Remove "${p.name}" from the sidebar? (Sessions are not affected.)`)) window.mc.removeProject(p.path); return; }
+    if (p.path && confirm(`Hide "${p.name}" from the sidebar? Mission Control keeps remembering it; add the folder again to bring it back.`)) window.mc.hideProject(p.path);
+  };
+  return li;
 }
 function renderSidebar() {
   const ul = $('#projects'); ul.innerHTML = '';
-  const list = visibleProjects();
-  if (state.selected && !list.some((p) => p.key === state.selected)) state.selected = list[0] ? list[0].key : null;
-  if (!state.selected && list[0]) state.selected = list[0].key;
-  for (const p of list) {
-    const li = el('li', 'proj' + (p.key === state.selected ? ' sel' : ''));
-    li.appendChild(el('span', 'dot' + (p.live ? ' live' : p.waiting ? ' waiting' : '')));
-    const mid = el('div'); mid.appendChild(el('div', 'proj-name', p.name)); mid.appendChild(el('div', 'proj-path', p.path || ('~/.claude/projects/' + p.slug)));
-    li.appendChild(mid);
-    const b = el('div', 'proj-badges');
-    if (p.live) b.appendChild(el('span', 'badge live', p.live + ' live'));
-    if (p.running) b.appendChild(el('span', 'badge run', p.running + ' running'));
-    if (!p.live && !p.running) b.appendChild(el('span', 'badge', p.sessions.length ? fmtAgo(Date.now() - p.lastActivity) : 'pinned'));
-    li.appendChild(b);
-    li.title = p.path || ''; li.onclick = () => selectProject(p.key);
-    li.oncontextmenu = (e) => { e.preventDefault(); if (p.pinned && confirm(`Remove "${p.name}" from the sidebar? (Sessions are not affected.)`)) window.mc.removeProject(p.path); };
-    ul.appendChild(li);
-  }
   const all = state.snapshot.projects || [];
+  const active = all.filter(isActiveProject);   // snapshot order is kept: live+running, then pinned, then last activity
+  const idle = all.filter((p) => !isActiveProject(p));
+  if (state.selected && !all.some((p) => p.key === state.selected)) state.selected = null;
+  if (!state.selected) state.selected = (active[0] || idle[0] || {}).key || null;
+  if (active.length) { ul.appendChild(el('li', 'proj-grp', 'Active')); for (const p of active) ul.appendChild(projectRow(p)); }
+  if (idle.length) {
+    const h = el('li', 'proj-grp toggle' + (state.idleOpen ? ' open' : ''));
+    h.appendChild(el('span', 'caret', state.idleOpen ? '▾' : '▸')); h.appendChild(el('span', null, 'Idle'));
+    h.appendChild(el('span', 'badge', String(idle.length)));
+    h.title = 'Projects with nothing running and no activity in the last 6 hours. They are never dropped.';
+    h.onclick = () => { state.idleOpen = !state.idleOpen; prefSet('mc.idleOpen', state.idleOpen); renderSidebar(); };
+    ul.appendChild(h);
+    if (state.idleOpen) for (const p of idle) ul.appendChild(projectRow(p));
+    else { const sel = idle.find((p) => p.key === state.selected); if (sel) ul.appendChild(projectRow(sel)); } // the open project stays visible
+  }
+  if (!all.length) ul.appendChild(el('li', 'proj-grp', 'No projects yet'));
   const live = all.reduce((a, p) => a + p.live, 0), run = all.reduce((a, p) => a + p.running, 0), wait = all.reduce((a, p) => a + p.waiting, 0);
   const notes = state.snapshot.openNotes || 0;
   $('#totals').innerHTML = `<b>${live}</b> live · <b>${run}</b> workers running · <b>${wait}</b> waiting for you${notes ? ` · <b>${notes}</b> in your inbox` : ''}`;
@@ -212,14 +234,14 @@ async function launchClaude(p, opts = {}) {
 
 // ───────────── Orchestrator (lead) tab
 // One lead session per project. Started with the Mission Control orchestrator rules appended to its system prompt and
-// a standup as its first message, so it reads memory (incl. the automatic checkpoint), the project's rules and plan,
-// maps the repo through a worker if needed, reports where things stand, and waits for orders.
-const STANDUP_NEW = 'Start of day in Mission Control. Run the standup from your orchestrator rules: memory and checkpoint first, then project rules and plan, repo map via a worker if needed. Report where the project stands and what you propose next, then wait for my instructions.';
-const STANDUP_RESUME = 'Resumed in Mission Control. Re-read the checkpoint and memory, tell me briefly where we are and what is unfinished, then wait for my instructions.';
+// a Recall as its first message, so it reads its memory brain (checkpoint, journal, handover note, repo map), the
+// project's rules and plan, maps the repo through a worker if needed, reports where things stand, and waits for orders.
+const RECALL_NEW = 'Start of day in Mission Control. Run the Recall from your orchestrator rules: it is Mission Control\'s own procedure, not any /standup or /wrapup skill. Memory brain first: checkpoint, journal, handover note and repo map; then the project\'s own rules and plan; map the repo with a worker if the map is missing or stale. Report where the project stands and what you propose next, then wait for my instructions.';
+const RECALL_RESUME = 'Resumed in Mission Control. Run a short Recall from your orchestrator rules: re-read the checkpoint, journal and handover note, tell me briefly where we are and what is unfinished, then wait for my instructions.';
 async function launchLead(p, opts = {}) {
   let sys = state.env.kitFile;
   try { sys = (await window.mc.leadPrepare(p.path, window.Persona.forLead(p).name)) || sys; } catch { /* fall back to the plain rules file */ }
-  const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: sys, prompt: opts.resume ? STANDUP_RESUME : STANDUP_NEW });
+  const t = await launchClaude(p, { resume: opts.resume, lead: true, stay: true, systemPromptFile: sys, prompt: opts.resume ? RECALL_RESUME : RECALL_NEW });
   if (!t) return;
   state.lead.set(p.key, t.sessionId); saveLead();
   activateTab('lead');
@@ -243,12 +265,12 @@ function renderLeadPane(p) {
     const b = el('button', 'btn', `Watch ${host.title}`); b.onclick = () => activateTab(host.ptyId); card.appendChild(b);
     return pane;
   }
-  card.appendChild(el('p', 'lead-sub', 'The lead session for this project. It starts with a standup: memory and the automatic checkpoint, the project’s rules, plan and board, a repo map from a worker when needed. Then it reports where things stand and takes your instructions, planning first and leading the workers.'));
+  card.appendChild(el('p', 'lead-sub', 'The lead session for this project. It starts with a Recall: the memory brain first — checkpoint, journal, handover note and repo map — then the project’s own rules, plan and board, with a fresh repo map from a worker when the map is missing or stale. Then it reports where things stand and takes your instructions, planning first and leading the workers.'));
   if (mode === 'remote') {
     card.appendChild(el('p', 'lead-warn', `Your lead session (${sess.title.slice(0, 60)}) is running outside Mission Control${sess.status === 'working' || sess.status === 'live' ? ' and is active right now. Close it there first, then' : '.'} take it over here to continue with the full conversation.`));
   }
   const row = el('div', 'lead-actions');
-  const bNew = el('button', 'btn primary', 'Start a new day'); bNew.title = 'New session with the orchestrator rules; runs the standup first'; bNew.onclick = () => launchLead(p); row.appendChild(bNew);
+  const bNew = el('button', 'btn primary', 'Start a new day'); bNew.title = 'New session with the orchestrator rules; runs the Recall first'; bNew.onclick = () => launchLead(p); row.appendChild(bNew);
   const recent = p.sessions.slice(0, 8);
   if (recent.length) {
     const sel = el('select', 'lead-select');
@@ -265,7 +287,7 @@ function renderLeadPane(p) {
   const foot = el('div', 'lead-foot');
   foot.appendChild(el('span', null, 'Rules the lead follows: '));
   const a = el('a', null, state.env.kitFile || 'orchestrator-system.md'); a.href = '#'; a.onclick = (e) => { e.preventDefault(); if (state.env.kitFile) window.mc.openPath(state.env.kitFile); };
-  foot.appendChild(a); foot.appendChild(el('span', null, ' · project-specific rules win: CLAUDE.md, docs/ORCHESTRATOR.md, /standup, .claude/agents'));
+  foot.appendChild(a); foot.appendChild(el('span', null, ' · project-specific rules win: CLAUDE.md, docs/ORCHESTRATOR.md, .claude/agents'));
   card.appendChild(foot);
   return pane;
 }
@@ -342,6 +364,12 @@ function appendLines(pane, lines) {
 window.mc.onLines(({ kind, id, lines }) => { const pane = state.panes.get(kind + ':' + id); if (pane) appendLines(pane, lines); });
 
 // ───────────── workers grid
+/** Copy to the clipboard, with a textarea fallback for when the file:// origin has no clipboard API. */
+function copyText(t) {
+  const fallback = () => { const ta = el('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch { /* ignore */ } ta.remove(); };
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).catch(fallback); return; } } catch { /* ignore */ }
+  fallback();
+}
 function renderWorkers() {
   const grid = $('#workers-grid'); const p = currentProject();
   grid.classList.toggle('max', !!state.maximized);
@@ -357,7 +385,13 @@ function renderWorkers() {
         const who = window.Persona.forWorker(w);
         const head = el('div', 'wk-head');
         const av = el('img', 'wk-avatar'); av.src = who.avatar; av.alt = who.name; av.title = `${who.name} · ${who.title}`; head.appendChild(av);
-        const line1 = el('div', 'wk-who'); line1.appendChild(el('span', 'wk-status')); line1.appendChild(el('span', 'wk-name', who.name)); line1.appendChild(el('span', 'wk-role', who.title)); head.appendChild(line1);
+        const line1 = el('div', 'wk-who'); line1.appendChild(el('span', 'wk-status')); line1.appendChild(el('span', 'wk-name', who.name)); line1.appendChild(el('span', 'wk-role', who.title));
+        // a finished worker can be continued: the Mission Control worker id is the Agent tool id, so the lead can
+        // SendMessage to it and the same transcript (and this window) comes back to life. Click copies the id.
+        const res = el('span', 'wk-res', '↻ resumable'); res.hidden = true;
+        res.title = `The lead can continue this worker with SendMessage to agent ${w.id}; its window reopens here.\nClick to copy the id.`;
+        res.onclick = () => { copyText(w.id); const t = res.textContent; res.textContent = '↻ id copied'; setTimeout(() => { res.textContent = t; }, 1500); };
+        line1.appendChild(res); head.appendChild(line1);
         head.appendChild(el('span', 'wk-task')); head.appendChild(el('span', 'wk-meta')); head.appendChild(el('span', 'wk-work'));
         const bMax = el('button', 'btn small', '⤢'); bMax.title = 'Maximize / restore'; bMax.onclick = () => { state.maximized = state.maximized === w.id ? null : w.id; renderWorkers(); };
         const bX = el('button', 'btn small', '×'); bX.title = 'Hide this worker window'; bX.onclick = () => { state.dismissed.add(w.id); if (state.maximized === w.id) state.maximized = null; renderWorkers(); };
@@ -369,6 +403,7 @@ function renderWorkers() {
       }
       card.className = 'wk ' + w.status;
       card.querySelector('.wk-status').className = 'wk-status ' + w.status;
+      card.querySelector('.wk-res').hidden = w.status === 'running' || w.status === 'stalled';
       card.querySelector('.wk-task').textContent = w.task || '(no description)'; card.querySelector('.wk-task').title = w.task || '';
       const dur = fmtAgo((w.status === 'running' ? Date.now() : w.lastTs) - w.startTs);
       const meta = card.querySelector('.wk-meta');
@@ -387,7 +422,6 @@ $('#btn-term').onclick = () => { const p = currentProject(); if (p) newTerminal(
 $('#btn-claude').onclick = () => { const p = currentProject(); if (p) launchClaude(p); };
 $('#btn-code').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openInCode(p.path); };
 $('#btn-folder').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openFolder(p.path); };
-$('#chk-all').onchange = (e) => { state.showIdle = e.target.checked; renderSidebar(); };
 $('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; renderWorkers(); };
 
 // session pane header: who this is (lead or plain session), and what they are on
@@ -578,7 +612,13 @@ async function answerNote(n, answer) {
 
 // ───────────── data feed
 window.mc.onEnv((env) => { state.env = env;
-  if (env.startView) setTimeout(() => { const p = currentProject(); if (!p) return; if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); } else if (env.startView !== 'memory') activateTab(env.startView); }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
+  if (env.startView) setTimeout(() => {
+    // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
+    if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
+    const p = currentProject(); if (!p) return;
+    if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
+    else if (env.startView !== 'memory') activateTab(env.startView);
+  }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();

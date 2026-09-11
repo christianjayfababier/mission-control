@@ -35,6 +35,12 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .badge.run { background: #2a1f45; color: var(--magenta); }
 .badge.live { background: #12301c; color: var(--green); }
 .sb-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+/* project groups: Active / Idle (collapsible; no project is ever dropped) */
+.proj-grp { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.proj-grp.toggle { cursor: pointer; border-radius: 6px; user-select: none; }
+.proj-grp.toggle:hover { background: var(--bg-3); color: var(--ink); }
+.proj-grp .caret { width: 9px; display: inline-block; }
+.proj-grp .badge { letter-spacing: 0; }
 
 /* ── buttons */
 .btn { background: var(--bg-3); border: 1px solid var(--line); color: var(--ink); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
@@ -255,6 +261,9 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .ln.error, .ln.error .k { color: var(--red); }
 .ln.note .k { color: #79c0ff; }
 .wk.done .wk-body { opacity: .8; }
+/* finished worker: the lead can continue it (SendMessage to the agent id); click copies the id */
+.wk-res { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; cursor: pointer; }
+.wk-res:hover { color: var(--green); border-color: #1f4b3a; }
 .sess-empty { color: var(--muted); padding: 20px; }
 
 /* ── view switch */

@@ -23,6 +23,7 @@ const DATA_DIR = path.join(os.homedir(), '.claude', 'mission-control');
 const PROJ_DIR_ROOT = path.join(os.homedir(), '.claude', 'projects');
 const START_VIEW = (() => { const i = process.argv.indexOf('--view'); return i >= 0 ? process.argv[i + 1] : null; })();
 const REGISTRY = path.join(DATA_DIR, 'projects.json');
+const SEEN = path.join(DATA_DIR, 'seen-projects.json');
 const WINSTATE = path.join(DATA_DIR, 'window.json');
 const SCREENSHOT = (() => { const i = process.argv.indexOf('--screenshot'); return i >= 0 ? (process.argv[i + 1] || 'screenshot.png') : null; })();
 const SCREENSHOT_WAIT = (() => { const i = process.argv.indexOf('--wait'); return i >= 0 ? Number(process.argv[i + 1]) || 4500 : 4500; })();
@@ -99,6 +100,44 @@ const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
 
 function registry() { const r = readJson(REGISTRY, []); return Array.isArray(r) ? r : []; }
+
+// ── seen projects: every project Mission Control has ever watched a session in, so the sidebar never loses one.
+// Transcript discovery only reaches back 48 h, so without this an auto-discovered project disappears after two idle
+// days. Seen projects are merged into the snapshot (flag `seen: true`, `pinned` untouched) and never drive polling.
+const norm = (p) => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+let seenCache = null;
+function seenStore() {
+  if (!seenCache) {
+    const r = readJson(SEEN, null);
+    seenCache = r && typeof r === 'object' && !Array.isArray(r) ? r : { projects: Array.isArray(r) ? r : [], hidden: [] };
+    if (!Array.isArray(seenCache.projects)) seenCache.projects = [];
+    if (!Array.isArray(seenCache.hidden)) seenCache.hidden = [];
+  }
+  return seenCache;
+}
+function saveSeen() { try { writeJson(SEEN, seenStore()); } catch (e) { console.error('seen-projects', e && e.message); } }
+function hiddenSet() { return new Set(seenStore().hidden.map(norm)); }
+/** Seen projects worth injecting into a snapshot: known path, not hidden. */
+function seenList() { const hid = hiddenSet(); return seenStore().projects.filter((x) => x.path && !hid.has(norm(x.path))); }
+// lastSeen only has to be good enough for the sidebar's "idle since" badge, so it is written at most once a minute
+// per project: without this the file is rewritten on nearly every snapshot tick while a session is talking.
+const SEEN_LAST_MS = 60 * 1000;
+/** Record (or refresh) every project the snapshot actually has sessions for. */
+function recordSeen(snap) {
+  const st = seenStore(); let dirty = false; const now = Date.now();
+  for (const p of snap.projects) {
+    if (!p.path || !p.sessions.length) continue; // only real, observed projects — not the ones we just injected
+    const k = norm(p.path);
+    const lastMs = p.lastActivity || now;
+    const last = new Date(lastMs).toISOString();
+    let rec = st.projects.find((x) => norm(x.path) === k);
+    if (!rec) { st.projects.push({ path: p.path, name: p.name, slug: p.slug || null, firstSeen: last, lastSeen: last }); dirty = true; continue; }
+    if (Math.abs(lastMs - (Date.parse(rec.lastSeen) || 0)) > SEEN_LAST_MS) { rec.lastSeen = last; dirty = true; }
+    if (p.slug && rec.slug !== p.slug) { rec.slug = p.slug; dirty = true; }
+    if (p.name && rec.name !== p.name) { rec.name = p.name; dirty = true; }
+  }
+  if (dirty) saveSeen();
+}
 function enrich(snap) {
   for (const p of snap.projects) {
     if (!p.path) { p.notes = []; continue; }
@@ -113,13 +152,20 @@ function enrich(snap) {
   snap.openNotes = notes.open().length;
   return snap;
 }
-function snapshot() { return enrich(watcher.snapshot(registry())); }
+function snapshot() {
+  const snap = watcher.snapshot(registry(), seenList());
+  recordSeen(snap);
+  const hid = hiddenSet();
+  snap.projects = snap.projects.filter((p) => p.pinned || !hid.has(norm(p.path))); // "Hide" only applies to unpinned projects
+  return enrich(snap);
+}
 function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', snapshot()); }
 // git remotes/branches and open PRs for projects that matter right now (active in the last 12 h or pinned)
 let refreshing = false;
 async function refreshIntegrations(force) {
   if (refreshing) return; refreshing = true;
   try {
+    // deliberately without seenList(): a project that is only remembered for the sidebar never costs a git or gh call
     const snap = watcher.snapshot(registry()); const now = Date.now(); let changed = false;
     for (const p of snap.projects) {
       if (!p.path || !(p.pinned || now - p.lastActivity < 12 * 3600 * 1000)) continue;
@@ -275,10 +321,14 @@ ipcMain.handle('projects:add', async () => {
   const p = r.filePaths[0];
   const reg = registry();
   if (!reg.some((x) => x.path.toLowerCase() === p.toLowerCase())) { reg.push({ path: p, name: path.basename(p), addedAt: new Date().toISOString() }); writeJson(REGISTRY, reg); }
+  unhideProject(p); // re-adding a folder undoes a "Hide"
   sendSnapshot();
   return p;
 });
 ipcMain.handle('projects:remove', (_e, p) => { writeJson(REGISTRY, registry().filter((x) => x.path.toLowerCase() !== String(p).toLowerCase())); sendSnapshot(); return true; });
+// "Hide" for a project Mission Control only remembers (not pinned): it stays in seen-projects.json but leaves the sidebar
+function unhideProject(p) { const st = seenStore(); const n = st.hidden.filter((x) => norm(x) !== norm(p)); if (n.length !== st.hidden.length) { st.hidden = n; saveSeen(); } }
+ipcMain.handle('projects:hide', (_e, p) => { const st = seenStore(); if (p && !st.hidden.some((x) => norm(x) === norm(p))) { st.hidden.push(String(p)); saveSeen(); } sendSnapshot(); return true; });
 ipcMain.handle('open:code', (_e, p) => { try { spawn('cmd.exe', ['/c', 'code', p], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); return true; } catch (e) { return String(e); } });
 ipcMain.handle('open:folder', (_e, p) => shell.openPath(p));
 
