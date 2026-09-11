@@ -47,6 +47,11 @@
     return t.replace(/\u0000(\d+)\u0000/g, (_m, n) => '<code>' + code[Number(n)] + '</code>');
   }
   const STRUCTURAL = /^\s*```|^#{1,6}\s|^\s*[-*•]\s|^\s*\d+[.)]\s|^\s*\|/;
+  const RE_UL = /^\s*[-*•]\s+(.*)$/, RE_OL = /^\s*(\d+)[.)]\s+(.*)$/;
+  const isItem = (l) => RE_UL.test(l) || RE_OL.test(l);
+  const isFence = (l) => /^\s*```/.test(l);
+  /** A wrapped or continued line of the item above it: indented, not blank, not an item or a fence of its own. */
+  const isCont = (l) => /^\s+\S/.test(l) && !isItem(l) && !isFence(l);
   function mdToHtml(src) {
     const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
     const out = []; let i = 0, list = null;
@@ -64,11 +69,23 @@
       const h = /^(#{1,6})\s+(.*)$/.exec(raw);
       if (h) { closeList(); const n = h[1].length; out.push(`<h${n} class="rl-h">` + inline(esc(h[2].replace(/\s+#+\s*$/, ''))) + `</h${n}>`); i++; continue; }
       if (/^\s*(?:[-*_]\s*){3,}$/.test(raw)) { closeList(); out.push('<hr class="rl-hr">'); i++; continue; }
-      const ul = /^\s*[-*•]\s+(.*)$/.exec(raw), ol = /^\s*\d+[.)]\s+(.*)$/.exec(raw);
+      const ul = RE_UL.exec(raw), ol = ul ? null : RE_OL.exec(raw);
       if (ul || ol) {
         const want = ul ? 'ul' : 'ol';
-        if (list !== want) { closeList(); out.push('<' + want + ' class="rl-ul">'); list = want; }
-        out.push('<li>' + inline(esc((ul || ol)[1])) + '</li>'); i++; continue;
+        if (list && list !== want) closeList();
+        if (!list) { out.push('<' + want + ' class="rl-ul">'); list = want; }
+        // An item is its own line plus the indented lines that continue it. Emitting those as a paragraph is what
+        // used to close the list, so every numbered item opened a fresh <ol> and the whole list read "1. 1. 1.".
+        const buf = [ul ? ul[1] : ol[2]];
+        i++;
+        while (i < lines.length) {
+          if (isCont(lines[i])) { buf.push(lines[i].trim()); i++; continue; }
+          if (!lines[i].trim() && i + 1 < lines.length && isCont(lines[i + 1])) { buf.push(''); i++; continue; }
+          break;
+        }
+        // `value` carries the source's own number, so the reader sees 1..6 even if something does split the list
+        out.push('<li' + (ol ? ' value="' + Number(ol[1]) + '"' : '') + '>' + inline(esc(buf.join('\n'))) + '</li>');
+        continue;
       }
       // A markdown table is not in the contract's list; keeping the pipe rows preformatted at least keeps the
       // columns aligned instead of collapsing a plan table into one run-on paragraph.
@@ -78,7 +95,14 @@
         out.push('<pre class="rl-code rl-table"><code>' + esc(buf.join('\n')) + '</code></pre>');
         continue;
       }
-      if (!raw.trim()) { closeList(); i++; continue; }
+      if (!raw.trim()) {
+        if (list) {
+          let j = i; while (j < lines.length && !lines[j].trim()) j++;   // the next line that says something
+          const next = j < lines.length ? lines[j] : '';
+          if ((RE_UL.test(next) ? 'ul' : RE_OL.test(next) ? 'ol' : null) !== list) closeList();
+        }
+        i++; continue;
+      }
       closeList();
       const buf = [raw]; i++;
       while (i < lines.length && lines[i].trim() && !STRUCTURAL.test(lines[i])) buf.push(lines[i++]);
