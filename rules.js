@@ -76,6 +76,10 @@ class Rules {
     r.rules.sort((a, b) => a.order - b.order);
     return this.save(p, r);
   }
+  /** Tab badge, called for every project on every snapshot tick. It reads the file every time, exactly like
+      boards.counts(): an mtime cache looks cheaper but NTFS gives two writes in the same millisecond the same
+      mtimeMs, so the badge would sit on a stale number until the next write. The file is a few hundred bytes
+      and load() never throws, so this costs less than the board count already taken on the same line. */
   count(p) { return this.load(p).rules.length; }
   /** Files changed since the last poll (written by mc-board.js or another instance). Returns their RulesFiles. */
   poll() {
@@ -92,6 +96,13 @@ class Rules {
 }
 
 // ── the lead's prompt block ──────────────────────────────────────────────────────────────────────
+/** An ISO timestamp as the owner's own calendar day (YYYY-MM-DD, local): a rule saved at 22:00 here is
+    dated tomorrow by the UTC string, and the lead reads these dates as the owner's days. */
+function localDay(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso || '').slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 /** Pure: the markdown appended to a lead's system prompt, '' when the project has no rules.
     Exactly the block in docs/RULES-CONTRACT.md — three spaces before the "(by, date)" tail. */
 function renderOwnerRules(rulesFile) {
@@ -100,7 +111,7 @@ function renderOwnerRules(rulesFile) {
     .sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id)));
   if (!list.length) return '';
   return ['## Owner rules for this project — binding, they win over the general rules above']
-    .concat(list.map((r) => `- ${r.id} ${String(r.text || '').trim()}   (${r.by || 'owner'}, ${String(r.createdAt || '').slice(0, 10)})`))
+    .concat(list.map((r) => `- ${r.id} ${String(r.text || '').trim()}   (${r.by || 'owner'}, ${localDay(r.createdAt)})`))
     .join('\n');
 }
 
@@ -207,4 +218,4 @@ function sources(projectPath, opts = {}) {
   return { repo, kit: { rules: kitFile || null, local: fileIfPresent(kitLocal), generated }, at: Date.now() };
 }
 
-module.exports = { Rules, safeKey, renderOwnerRules, readText, sources, firstLineOf, CANDIDATES, MAX_READ, MAX_TEXT };
+module.exports = { Rules, safeKey, renderOwnerRules, readText, sources, firstLineOf, localDay, CANDIDATES, MAX_READ, MAX_TEXT };

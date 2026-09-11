@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { postMergeVerdict } = require('../prwatch.js');
 const { parsePorcelain, parseNameStatus, parseWorktrees } = require('../explorer.js');
 const { relTo } = require('../transcripts.js');
-const { Rules, renderOwnerRules, readText, sources } = require('../rules.js');
+const { Rules, renderOwnerRules, readText, sources, localDay } = require('../rules.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -86,16 +86,22 @@ check('renderOwnerRules: nothing to say when the project has no rules', () => {
   assert.equal(renderOwnerRules(null), '');
   assert.equal(renderOwnerRules({ seq: 0, rules: [] }), '');
 });
-check('renderOwnerRules: the exact block from the contract, in `order`, dated from createdAt', () => {
+check("renderOwnerRules: the exact block from the contract, in `order`, dated in the owner's local days", () => {
+  // The dates are the owner's calendar days, so the expectation is built the same way — the check holds in any zone.
+  const day = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const late = '2026-09-12T22:30:00.000Z';   // a UTC evening: west of UTC still the 12th, east of it already the 13th
+  const early = '2026-09-12T03:00:00.000Z';
   const block = renderOwnerRules({ seq: 2, rules: [
-    rule('R-002', 'Ask before touching the schema.', 'Skye', '2026-09-12T09:30:00.000Z', 1),
-    rule('R-001', 'Never force-push a shared branch.', 'owner', '2026-09-12T08:00:00.000Z', 0),
+    rule('R-002', 'Ask before touching the schema.', 'Skye', late, 1),
+    rule('R-001', 'Never force-push a shared branch.', 'owner', early, 0),
   ] });
   assert.equal(block, [
     '## Owner rules for this project — binding, they win over the general rules above',
-    '- R-001 Never force-push a shared branch.   (owner, 2026-09-12)',
-    '- R-002 Ask before touching the schema.   (Skye, 2026-09-12)',
+    `- R-001 Never force-push a shared branch.   (owner, ${day(early)})`,
+    `- R-002 Ask before touching the schema.   (Skye, ${day(late)})`,
   ].join('\n'));
+  assert.equal(localDay(late), day(late));
+  assert.equal(localDay(''), '');            // a rule written by hand with no date degrades quietly
 });
 
 // one throwaway tree for the file-facing checks, removed at the end
@@ -167,6 +173,17 @@ check('Rules store: add, patch, reorder, remove, and ids that never rewind', () 
   const seen = new Rules(path.join(tmp, 'rules'));
   assert.equal(seen.poll().length, 1);   // a file written by someone else shows up once
   assert.equal(seen.poll().length, 0);
+});
+check('count(): 0 without a file, and it follows a write from outside within the same millisecond', () => {
+  const store = new Rules(path.join(tmp, 'counted'));
+  const other = new Rules(path.join(tmp, 'counted'));   // stands in for mc-board.js writing the same file
+  assert.equal(store.count(proj), 0);                   // no file yet
+  store.add(proj, 'One.');
+  assert.equal(store.count(proj), 1);
+  other.add(proj, 'Two.');                              // NTFS can stamp both writes with the same mtimeMs
+  assert.equal(store.count(proj), 2);                   // so the badge must not be cached on mtime
+  store.remove(proj, 'R-001');
+  assert.equal(store.count(proj), 1);
 });
 check('mc-board.js rule add | list | remove writes the same file (MC_DATA_DIR honoured when set)', () => {
   const script = path.join(__dirname, '..', 'kit', 'mc-board.js');
