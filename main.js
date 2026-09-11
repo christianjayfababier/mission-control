@@ -151,7 +151,7 @@ function enrich(snap) {
     p.inflight = p.repo ? prwatch.inflight(p.repo.full) : [];
     p.notes = notes.forProject(p.path);
     p.boardCounts = boards.counts(p.path);
-    p.ruleCount = rules.count(p.path);   // Rules tab badge; the file is parsed again only when its mtime moved
+    p.ruleCount = rules.count(p.path);   // Rules tab badge; read every time on purpose: same-millisecond writes share an mtime, so a cache showed a stale badge
   }
   snap.openNotes = notes.open().length;
   return snap;
