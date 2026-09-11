@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('mc', {
   openPath: (p) => ipcRenderer.invoke('open:path', p),
   openUrl: (u) => ipcRenderer.invoke('open:url', u),
   readMemory: (opts) => ipcRenderer.invoke('memory:read', opts),
+  // explorer: file tree, git status, branches, branch diff (docs/EXPLORER-CONTRACT.md)
+  explorerList: (root, rel) => ipcRenderer.invoke('explorer:list', { root, rel }),
+  explorerStatus: (root) => ipcRenderer.invoke('explorer:status', root),
+  explorerBranches: (projectRoot) => ipcRenderer.invoke('explorer:branches', projectRoot),
+  explorerDiff: (projectRoot, branch) => ipcRenderer.invoke('explorer:diff', { root: projectRoot, branch }),
+  openFile: (p, line) => ipcRenderer.invoke('open:file', { path: p, line }),
   // repo + GitHub account per project
   ghAccounts: () => ipcRenderer.invoke('gh:accounts'),
   settingsGet: (p) => ipcRenderer.invoke('settings:get', p),
