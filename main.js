@@ -119,16 +119,20 @@ function saveSeen() { try { writeJson(SEEN, seenStore()); } catch (e) { console.
 function hiddenSet() { return new Set(seenStore().hidden.map(norm)); }
 /** Seen projects worth injecting into a snapshot: known path, not hidden. */
 function seenList() { const hid = hiddenSet(); return seenStore().projects.filter((x) => x.path && !hid.has(norm(x.path))); }
+// lastSeen only has to be good enough for the sidebar's "idle since" badge, so it is written at most once a minute
+// per project: without this the file is rewritten on nearly every snapshot tick while a session is talking.
+const SEEN_LAST_MS = 60 * 1000;
 /** Record (or refresh) every project the snapshot actually has sessions for. */
 function recordSeen(snap) {
-  const st = seenStore(); let dirty = false; const nowIso = new Date().toISOString();
+  const st = seenStore(); let dirty = false; const now = Date.now();
   for (const p of snap.projects) {
     if (!p.path || !p.sessions.length) continue; // only real, observed projects — not the ones we just injected
     const k = norm(p.path);
-    const last = p.lastActivity ? new Date(p.lastActivity).toISOString() : nowIso;
+    const lastMs = p.lastActivity || now;
+    const last = new Date(lastMs).toISOString();
     let rec = st.projects.find((x) => norm(x.path) === k);
     if (!rec) { st.projects.push({ path: p.path, name: p.name, slug: p.slug || null, firstSeen: last, lastSeen: last }); dirty = true; continue; }
-    if (rec.lastSeen !== last) { rec.lastSeen = last; dirty = true; }
+    if (Math.abs(lastMs - (Date.parse(rec.lastSeen) || 0)) > SEEN_LAST_MS) { rec.lastSeen = last; dirty = true; }
     if (p.slug && rec.slug !== p.slug) { rec.slug = p.slug; dirty = true; }
     if (p.name && rec.name !== p.name) { rec.name = p.name; dirty = true; }
   }
