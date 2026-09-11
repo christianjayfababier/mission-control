@@ -73,7 +73,7 @@ try {
   } else if (kind === 'watch') {
     // node mc-board.js watch add <pr number or url> [--ticket T-003]   — Mission Control then reports checks, merge and deployment to the owner's inbox
     b.watches = b.watches || [];
-    const num = a2 ? Number((String(a2).match(/(\d+)\s*$/) || [])[1]) : NaN;
+    const num = a1 ? Number((String(a1).match(/(\d+)\s*$/) || [])[1]) : NaN;
     if (cmd === 'add' && num) { if (!b.watches.some((w) => w.pr === num)) b.watches.push({ pr: num, ticket: flags.ticket || null, since: now() }); save(b); console.log(`watching PR #${num}: Mission Control will post checks, merge and deployment updates to the owner's inbox`); }
     else if (cmd === 'remove' && num) { b.watches = b.watches.filter((w) => w.pr !== num); save(b); console.log('removed watch for PR #' + num); }
     else if (cmd === 'list') console.log(b.watches.length ? b.watches.map((w) => `PR #${w.pr}${w.ticket ? ' (' + w.ticket + ')' : ''} since ${w.since}`).join('\n') : 'no watches');
