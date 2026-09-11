@@ -21,13 +21,16 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .totals { color: var(--muted); margin-top: 6px; font-size: 12px; }
 .totals b { color: var(--ink); }
 .sb-section { padding: 10px 14px 4px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.projects { list-style: none; margin: 0; padding: 0 6px; overflow-y: auto; flex: 1; min-height: 0; }
+.projects { list-style: none; margin: 0; padding: 0 6px; overflow-x: hidden; overflow-y: auto; flex: 1; min-height: 0; }
 .proj { padding: 8px 8px; border-radius: 6px; cursor: pointer; display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: start; margin-bottom: 2px; }
 .proj:hover { background: var(--bg-3); }
 .proj.sel { background: #1f2a3a; outline: 1px solid #2f3f55; }
 .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; background: var(--muted); opacity: .5; }
 .dot.live { background: var(--green); opacity: 1; box-shadow: 0 0 8px var(--green); }
 .dot.waiting { background: var(--amber); opacity: 1; }
+/* the name/path cell: min-width 0 lets it shrink so .proj-name/.proj-path ellipsize instead of
+   widening the row into a horizontal scrollbar. The badges column stays auto-sized. */
+.proj > .dot + div { min-width: 0; }
 .proj-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-path { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
 .proj-badges { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
@@ -134,14 +137,17 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .inbox-head { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); margin-top: 4px; }
 .inbox-head .badge:empty { display: none; }
 .inbox-status { text-transform: none; letter-spacing: 0; color: var(--green); font-size: 11px; flex: 1; text-align: right; }
-.inbox { flex: none; max-height: 42%; overflow-y: auto; padding: 0 6px 6px; display: flex; flex-direction: column; gap: 6px; }
+.inbox { flex: none; max-height: 42%; overflow-x: hidden; overflow-y: auto; padding: 0 6px 6px; display: flex; flex-direction: column; gap: 6px; }
 .inbox:empty::after { content: 'No notes from your orchestrators. Decisions, questions and announcements land here.'; display: block; color: var(--muted); font-size: 11px; padding: 6px 8px; line-height: 1.5; }
-.note { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; }
+.note { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; min-width: 0; overflow: hidden; }
 .note.decision { border-color: #4a3a7a; } .note.blocker { border-color: #6b2a2a; } .note.announcement { border-color: #1f4b3a; }
-.note-top { display: flex; gap: 6px; align-items: center; font-size: 10px; color: var(--muted); }
+.note-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 10px; color: var(--muted); }
+/* the project name is the only long part of the line: it shrinks with an ellipsis so the type pill,
+   the age and the source tag always stay inside the card's border. */
+.note-top > .note-type + span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .note-type { text-transform: uppercase; letter-spacing: .08em; font-weight: 700; padding: 0 6px; border-radius: 999px; background: var(--bg-3); }
 .note.decision .note-type { color: var(--magenta); } .note.question .note-type { color: var(--accent); } .note.announcement .note-type { color: var(--green); } .note.blocker .note-type { color: var(--red); }
-.note-title { font-weight: 600; line-height: 1.35; }
+.note-title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .note-body { color: #c9d4e0; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 4.4em; overflow: hidden; cursor: pointer; }
 .note-body.open { max-height: none; }
 .note-opts { display: flex; gap: 5px; flex-wrap: wrap; }
