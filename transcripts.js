@@ -155,7 +155,7 @@ class Worker {
   constructor(id, sessionId, file, metaFile) {
     this.id = id; this.sessionId = sessionId; this.file = file; this.metaFile = metaFile; this.tailer = new Tailer(file);
     this.meta = null; this.startTs = 0; this.lastTs = 0; this.toolCount = 0; this.lastTool = null; this.lastText = ''; this.lastStop = null; this.lastLineType = null; this.outTokens = 0; this.model = null;
-    this.pending = new Map(); this.buf = new LineBuffer(); this.sawPrompt = false; this.gitBranch = null; this.cwd = null;
+    this.pending = new Map(); this.buf = new LineBuffer(); this.sawPrompt = false; this.gitBranch = null; this.cwd = null; this.resumedAt = 0;
   }
   loadMeta() { if (this.meta) return; try { this.meta = JSON.parse(fs.readFileSync(this.metaFile, 'utf8')); } catch { this.meta = {}; } }
   apply(o, out) {
@@ -184,17 +184,21 @@ class Worker {
         if (it.type === 'tool_result') {
           const p = this.pending.get(it.tool_use_id); this.pending.delete(it.tool_use_id);
           if (it.is_error && p) out.push(this.buf.push(ts, 'error', `${p.name} failed: ${textOf(it.content).slice(0, 300)}`));
-        } else if (it.type === 'text' && it.text && !this.sawPrompt) {
+        } else if (it.type === 'text' && it.text && (!this.sawPrompt || !/<system-reminder>/.test(it.text))) {
+          // a new prompt after the worker ended its turn means it was continued (SendMessage to the same agent id):
+          // clear the finished marker so `status` reports 'running' again and the card leaves the Finished list
+          if (this.lastStop === 'end_turn') { this.lastStop = null; this.resumedAt = ts || Date.now(); }
           this.sawPrompt = true; out.push(this.buf.push(ts, 'you', it.text.replace(/<[^>]+>/g, ' ').trim()));
-        } else if (it.type === 'text' && it.text && !/<system-reminder>/.test(it.text)) {
-          out.push(this.buf.push(ts, 'you', it.text.replace(/<[^>]+>/g, ' ').trim()));
         }
       }
     }
   }
   get status() {
-    const fresh = Date.now() - this.tailer.mtime < WORKER_LIVE_MS;
-    if (this.lastLineType === 'user' || this.pending.size > 0 || this.lastStop === 'tool_use') return fresh || Date.now() - this.lastTs < LIVE_MS ? 'running' : 'stalled';
+    const now = Date.now();
+    const fresh = now - this.tailer.mtime < WORKER_LIVE_MS;
+    if (this.lastLineType === 'user' || this.pending.size > 0 || this.lastStop === 'tool_use') return fresh || now - this.lastTs < LIVE_MS ? 'running' : 'stalled';
+    // a continued worker writes into the same agent-<id>.jsonl: new content after it was done means it is alive again
+    if (this.resumedAt && this.lastStop !== 'end_turn' && (fresh || now - this.lastTs < LIVE_MS)) return 'running';
     if (this.lastStop === 'end_turn') return 'done';
     return fresh ? 'running' : 'unknown';
   }
@@ -266,16 +270,25 @@ class TranscriptWatcher extends EventEmitter {
     if (!t) return [];
     return t.buf.lines.filter((l) => l.seq > afterSeq);
   }
-  /** Group into projects keyed by lower-cased cwd (or slug). */
-  snapshot(extraProjects = []) {
+  /** Group into projects keyed by lower-cased cwd (or slug). `seenProjects` are ones Mission Control remembers
+      from earlier days: merged in so they never vanish, flagged `seen`, and left unpinned. */
+  snapshot(extraProjects = [], seenProjects = []) {
     const projects = new Map();
     const ensure = (cwd, slug) => {
       const key = cwd ? cwd.replace(/[\\/]+$/, '').toLowerCase() : 'slug:' + slug;
       let p = projects.get(key);
-      if (!p) { p = { key, name: cwd ? path.basename(cwd) : slug, path: cwd || null, slug: slug || null, sessions: [], workers: [], pinned: false }; projects.set(key, p); }
+      if (!p) { p = { key, name: cwd ? path.basename(cwd) : slug, path: cwd || null, slug: slug || null, sessions: [], workers: [], pinned: false, seen: false, lastActivity: 0 }; projects.set(key, p); }
       return p;
     };
     for (const ep of extraProjects) { const p = ensure(ep.path, null); p.pinned = true; if (ep.name) p.name = ep.name; }
+    for (const sp of seenProjects) {
+      if (!sp.path) continue;
+      const p = ensure(sp.path, sp.slug || null);
+      p.seen = true;
+      if (!p.pinned && sp.name) p.name = sp.name;
+      if (sp.slug && !p.slug) p.slug = sp.slug;
+      const t = Date.parse(sp.lastSeen || sp.firstSeen || ''); if (t) p.lastActivity = Math.max(p.lastActivity, t);
+    }
     const workersBySession = new Map();
     for (const w of this.workers.values()) { if (!workersBySession.has(w.sessionId)) workersBySession.set(w.sessionId, []); workersBySession.get(w.sessionId).push(w); }
     for (const s of this.sessions.values()) {
@@ -288,7 +301,7 @@ class TranscriptWatcher extends EventEmitter {
     for (const p of arr) {
       p.sessions.sort((a, b) => b.lastActivity - a.lastActivity);
       p.workers.sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1) || b.lastTs - a.lastTs);
-      p.lastActivity = Math.max(0, ...p.sessions.map((s) => s.lastActivity));
+      p.lastActivity = Math.max(p.lastActivity || 0, ...p.sessions.map((s) => s.lastActivity));
       p.live = p.sessions.filter((s) => s.status === 'working' || s.status === 'live').length;
       p.waiting = p.sessions.filter((s) => s.status === 'waiting').length;
       p.running = p.workers.filter((w) => w.status === 'running').length;
