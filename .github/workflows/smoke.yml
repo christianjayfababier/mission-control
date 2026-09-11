@@ -1,0 +1,27 @@
+name: smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    # Windows is the app's only target, and Electron renders there without a virtual display.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # No @electron/rebuild step on purpose: node-pty's binary is built for Node, not Electron, so
+      # require('node-pty') throws on CI. main.js catches that (pty/ptyError) and the app boots without
+      # terminals, which is all the smoke test needs. Keeping CI light is deliberate.
+      - run: npm test
