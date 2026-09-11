@@ -17,7 +17,7 @@ const path = require('path');
 const NOTE = 'mission-control-checkpoint.md';
 const JOURNAL = 'mission-control-journal.md';
 const POINTER = `- [Mission Control checkpoint](${NOTE}) — auto-updated after every turn and worker change: last request, session state, workers, tickets/todos, inbox, PRs in flight, repo and account. Read first at session start.`;
-const JPOINTER = `- [Mission Control journal](${JOURNAL}) — auto-appended history, day by day: owner requests, orchestrator answers, worker results, decisions answered in the inbox, PR and deployment events, ticket changes. Skim the last days at standup.`;
+const JPOINTER = `- [Mission Control journal](${JOURNAL}) — auto-appended history, day by day: owner requests, orchestrator answers, worker results, decisions answered in the inbox, PR and deployment events, ticket changes. Skim the last days at Recall.`;
 const HOURS = 48;
 const JOURNAL_DAYS = 45;
 
