@@ -40,6 +40,15 @@ contextBridge.exposeInMainWorld('mc', {
   boardPatch: (p, kind, id, patch) => ipcRenderer.invoke('board:patch', { path: p, kind, id, patch }),
   boardRemove: (p, kind, id) => ipcRenderer.invoke('board:remove', { path: p, kind, id }),
   onBoard: on('board'),
+  // owner rules per project, repo rule-file discovery and the viewer's reader (docs/RULES-CONTRACT.md)
+  rulesGet: (p) => ipcRenderer.invoke('rules:get', p),
+  rulesAdd: (p, text) => ipcRenderer.invoke('rules:add', { path: p, text }),
+  rulesPatch: (p, id, patch) => ipcRenderer.invoke('rules:patch', { path: p, id, patch }),
+  rulesRemove: (p, id) => ipcRenderer.invoke('rules:remove', { path: p, id }),
+  rulesReorder: (p, ids) => ipcRenderer.invoke('rules:reorder', { path: p, ids }),
+  rulesSources: (p) => ipcRenderer.invoke('rules:sources', p),
+  readText: (absPath, project) => ipcRenderer.invoke('rules:read', { path: absPath, project }), // project optional; only the project, the kit files and DATA_DIR/generated are readable
+  onRules: on('rules'),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
   leadPrepare: (p, name) => ipcRenderer.invoke('lead:prepare', { path: p, name }),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
