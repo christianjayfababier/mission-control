@@ -93,6 +93,7 @@ function selectProject(key) {
   $('#ph-name').textContent = p ? p.name : 'Select a project';
   $('#ph-path').textContent = p ? (p.path || '') : '';
   renderHeader(p); renderPrStrip(p);
+  if (window.Explorer) window.Explorer.render(p, state.snapshot);   // files/branches panel follows the selection
   // show this project's panes, hide the others
   for (const [k, list] of state.terms) for (const t of list) t.el.classList.toggle('active', false);
   renderTabs();
@@ -616,12 +617,15 @@ window.mc.onEnv((env) => { state.env = env;
     // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
     const p = currentProject(); if (!p) return;
+    // --view explorer opens the Explorer panel; --view explorer-branches opens it on the Branches tab
+    if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
+  if (window.Explorer) window.Explorer.render(p, snap);
   if (p) {
     $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs(); renderWorkers();
     if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key));

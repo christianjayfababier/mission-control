@@ -310,3 +310,49 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .mem-detail .links { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; }
 .mem-detail .links a { color: var(--magenta); cursor: pointer; margin-right: 8px; }
 .mem-detail .actions { display: flex; gap: 6px; margin-top: 12px; }
+
+/* ── explorer (files + branches panel, between the sidebar and the body) */
+#app.explorer-open { grid-template-columns: 300px 280px 1fr; }
+.btn.active { background: #1f4b7a; border-color: #2b6cb0; color: var(--ink); }
+.explorer { background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100vh; }
+.ex-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.ex-head .seg-btn { padding: 4px 10px; font-size: 12px; }
+.ex-spacer { flex: 1; }
+.ex-root { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; min-width: 0; }
+.ex-root-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ex-root-name.wt { color: var(--magenta); font-family: var(--mono); }
+.ex-back { color: var(--accent); cursor: pointer; text-decoration: underline dotted; white-space: nowrap; }
+.ex-branch { color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ex-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 10px; }
+.ex-msg, .ex-note { padding: 8px 10px; font-size: 12px; }
+.ex-note { padding: 2px 10px; font-size: 11px; }
+.ex-note.err { color: var(--red); }
+.ex-tree { font-size: 12px; }
+.ex-row { display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 0; cursor: pointer; white-space: nowrap; border-radius: 4px; }
+.ex-row:hover { background: var(--bg-3); }
+.ex-row.ign { opacity: .45; }
+.ex-row.dir > .ex-name { font-weight: 600; }
+.ex-row.branch.current > .ex-name { color: var(--green); font-weight: 700; }
+.ex-caret { width: 10px; flex: none; color: var(--muted); }
+.ex-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
+.ex-row.branch { flex-wrap: wrap; row-gap: 3px; }
+.ex-row.branch .ex-name { flex: 0 1 auto; max-width: 100%; }
+.ex-fill { flex: 1 1 auto; }
+.ex-dirdot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); margin-left: 5px; vertical-align: middle; }
+.ex-mark { flex: none; width: 12px; text-align: center; font-weight: 700; font-family: var(--mono); }
+.ex-mark.m { color: var(--amber); } .ex-mark.a { color: var(--green); } .ex-mark.d { color: var(--red); } .ex-mark.r { color: var(--accent); }
+.ex-pills { display: flex; gap: 3px; flex: none; }
+.ex-pill { font-size: 9px; line-height: 14px; padding: 0 5px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); background: transparent; max-width: 74px; overflow: hidden; text-overflow: ellipsis; }
+.ex-pill.edit { background: #1f4b7a; border-color: #2b6cb0; color: var(--ink); }
+.ex-pill.done { opacity: .45; }
+.ex-pill.more { border-color: var(--line); color: var(--muted); }
+.ex-pill .fk { margin-right: 2px; color: var(--magenta); }
+.ex-wt { color: var(--magenta); font-size: 10px; font-family: var(--mono); flex: none; }
+.ex-pr { font-size: 10px; padding: 0 5px; border-radius: 999px; background: #2a1f45; color: var(--magenta); flex: none; }
+.ex-pr.draft { opacity: .6; }
+.ex-ab { font-size: 10px; color: var(--muted); font-family: var(--mono); flex: none; }
+.ex-showfiles { flex: none; font-size: 10px; padding: 0 6px; }
+.ex-menu { position: fixed; z-index: 50; background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); min-width: 160px; }
+.ex-mi { padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.ex-mi:hover { background: #223049; }
+.ex-err { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
