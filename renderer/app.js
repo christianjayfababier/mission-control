@@ -8,10 +8,8 @@ const fmtTok = (n) => !n ? '0' : n < 1000 ? String(n) : n < 1e6 ? (n / 1000).toF
 const clock = (ts) => new Date(ts).toTimeString().slice(0, 8);
 
 const state = {
-  env: { ptyAvailable: false }, snapshot: { projects: [] }, selected: null,
-  idleOpen: false,        // sidebar "Idle" group expanded? (remembered in localStorage)
-  finishedOpen: false,    // Workers "Finished" list expanded? (remembered in localStorage)
-  finOpen: new Set(),     // worker ids whose transcript is open inside the Finished list
+  env: { ptyAvailable: false }, snapshot: { projects: [] }, selected: null, showFinished: true,
+  idleOpen: false,       // sidebar "Idle" group expanded? (remembered in localStorage)
   terms: new Map(),      // projectKey -> [{ptyId, term, fit, el, tab}]
   activeTab: new Map(),  // projectKey -> tab id ('pty1' | 'sess:<id>')
   panes: new Map(),      // paneId -> {el, body, lastSeq, kind, id}
@@ -26,7 +24,6 @@ function saveLead() { try { localStorage.setItem('mc.lead', JSON.stringify(Objec
 const prefGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch { return d; } };
 const prefSet = (k, v) => { try { localStorage.setItem(k, v ? '1' : '0'); } catch { /* ignore */ } };
 state.idleOpen = prefGet('mc.idleOpen', false);
-state.finishedOpen = prefGet('mc.finishedOpen', false);
 const termTheme = { background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff', selectionBackground: '#264f78', black: '#0d1117', brightBlack: '#6e7681', red: '#ff7b72', green: '#3fb950', yellow: '#d29922', blue: '#58a6ff', magenta: '#bc8cff', cyan: '#39c5cf', white: '#b1bac4', brightWhite: '#f0f6fc' };
 
 // ───────────── sidebar
@@ -366,26 +363,19 @@ function appendLines(pane, lines) {
 }
 window.mc.onLines(({ kind, id, lines }) => { const pane = state.panes.get(kind + ':' + id); if (pane) appendLines(pane, lines); });
 
-// ───────────── workers: running ones as full panes, finished ones as a compact list below the grid
-const isFinished = (w) => w.status === 'done' || w.status === 'unknown';
+// ───────────── workers grid
+/** Copy to the clipboard, with a textarea fallback for when the file:// origin has no clipboard API. */
 function copyText(t) {
   const fallback = () => { const ta = el('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch { /* ignore */ } ta.remove(); };
   try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).catch(fallback); return; } } catch { /* ignore */ }
   fallback();
 }
 function renderWorkers() {
-  const p = currentProject();
-  const running = [], finished = [];
-  if (p) for (const w of p.workers) { if (state.dismissed.has(w.id)) continue; (isFinished(w) ? finished : running).push(w); }
-  renderRunningGrid(p, running);
-  renderFinished(p, finished);
-  $('#workers-count').textContent = p ? `${running.length} running · ${finished.length} finished · ${p.workers.length} total` : '';
-}
-function renderRunningGrid(p, workers) {
-  const grid = $('#workers-grid');
+  const grid = $('#workers-grid'); const p = currentProject();
   grid.classList.toggle('max', !!state.maximized);
   const wanted = new Set();
-  {
+  if (p) {
+    const workers = p.workers.filter((w) => !state.dismissed.has(w.id) && (state.showFinished || w.status === 'running'));
     for (const w of workers) {
       if (state.maximized && state.maximized !== w.id) continue;
       wanted.add('wk:' + w.id);
@@ -395,7 +385,13 @@ function renderRunningGrid(p, workers) {
         const who = window.Persona.forWorker(w);
         const head = el('div', 'wk-head');
         const av = el('img', 'wk-avatar'); av.src = who.avatar; av.alt = who.name; av.title = `${who.name} · ${who.title}`; head.appendChild(av);
-        const line1 = el('div', 'wk-who'); line1.appendChild(el('span', 'wk-status')); line1.appendChild(el('span', 'wk-name', who.name)); line1.appendChild(el('span', 'wk-role', who.title)); head.appendChild(line1);
+        const line1 = el('div', 'wk-who'); line1.appendChild(el('span', 'wk-status')); line1.appendChild(el('span', 'wk-name', who.name)); line1.appendChild(el('span', 'wk-role', who.title));
+        // a finished worker can be continued: the Mission Control worker id is the Agent tool id, so the lead can
+        // SendMessage to it and the same transcript (and this window) comes back to life. Click copies the id.
+        const res = el('span', 'wk-res', '↻ resumable'); res.hidden = true;
+        res.title = `The lead can continue this worker with SendMessage to agent ${w.id}; its window reopens here.\nClick to copy the id.`;
+        res.onclick = () => { copyText(w.id); const t = res.textContent; res.textContent = '↻ id copied'; setTimeout(() => { res.textContent = t; }, 1500); };
+        line1.appendChild(res); head.appendChild(line1);
         head.appendChild(el('span', 'wk-task')); head.appendChild(el('span', 'wk-meta')); head.appendChild(el('span', 'wk-work'));
         const bMax = el('button', 'btn small', '⤢'); bMax.title = 'Maximize / restore'; bMax.onclick = () => { state.maximized = state.maximized === w.id ? null : w.id; renderWorkers(); };
         const bX = el('button', 'btn small', '×'); bX.title = 'Hide this worker window'; bX.onclick = () => { state.dismissed.add(w.id); if (state.maximized === w.id) state.maximized = null; renderWorkers(); };
@@ -407,6 +403,7 @@ function renderRunningGrid(p, workers) {
       }
       card.className = 'wk ' + w.status;
       card.querySelector('.wk-status').className = 'wk-status ' + w.status;
+      card.querySelector('.wk-res').hidden = w.status === 'running' || w.status === 'stalled';
       card.querySelector('.wk-task').textContent = w.task || '(no description)'; card.querySelector('.wk-task').title = w.task || '';
       const dur = fmtAgo((w.status === 'running' ? Date.now() : w.lastTs) - w.startTs);
       const meta = card.querySelector('.wk-meta');
@@ -416,61 +413,8 @@ function renderRunningGrid(p, workers) {
     }
   }
   for (const card of [...grid.children]) if (!wanted.has('wk:' + card.dataset.id)) card.remove();
+  $('#workers-count').textContent = p ? `${p.running} running · ${p.workers.length} total` : '';
 }
-
-// ───────────── finished workers: one compact row each, collapsed by default, transcript opens inline
-function renderFinished(p, workers) {
-  const box = $('#finished'), listEl = $('#fin-list'), head = $('#fin-head');
-  box.hidden = !workers.length;
-  $('#fin-count').textContent = workers.length ? String(workers.length) : '';
-  head.classList.toggle('open', state.finishedOpen);
-  head.querySelector('.caret').textContent = state.finishedOpen ? '▾' : '▸';
-  listEl.hidden = !state.finishedOpen;
-  if (listEl.hidden) return; // rows (and any open transcript) are rebuilt when the section is opened again
-  const wanted = new Set();
-  for (const w of workers) {
-    wanted.add(w.id);
-    let item = listEl.querySelector(`[data-id="${w.id}"]`);
-    if (!item) {
-      const who = window.Persona.forWorker(w);
-      item = el('div', 'fin-item'); item.dataset.id = w.id;
-      const row = el('div', 'fin-row');
-      const av = el('img', 'fin-avatar'); av.src = who.avatar; av.alt = who.name; row.appendChild(av);
-      const main = el('div', 'fin-main');
-      const l1 = el('div', 'fin-l1');
-      l1.appendChild(el('span', 'fin-name', who.name)); l1.appendChild(el('span', 'fin-role', who.title)); l1.appendChild(el('span', 'fin-task'));
-      main.appendChild(l1); main.appendChild(el('div', 'fin-meta')); main.appendChild(el('div', 'fin-last')); main.appendChild(el('div', 'wk-work fin-work'));
-      row.appendChild(main);
-      const acts = el('div', 'fin-acts');
-      const res = el('span', 'fin-res', '↻ resumable');
-      res.title = `The lead can continue this worker with SendMessage to agent ${w.id}; its window reopens here.`;
-      acts.appendChild(res);
-      const bCopy = el('button', 'btn small', 'Copy id'); bCopy.title = `Copy the agent id ${w.id} to the clipboard`;
-      bCopy.onclick = (e) => { e.stopPropagation(); copyText(w.id); bCopy.textContent = 'copied'; setTimeout(() => { bCopy.textContent = 'Copy id'; }, 1500); };
-      const bX = el('button', 'btn small', '×'); bX.title = 'Hide this worker';
-      bX.onclick = (e) => { e.stopPropagation(); state.dismissed.add(w.id); state.finOpen.delete(w.id); renderWorkers(); };
-      acts.appendChild(bCopy); acts.appendChild(bX);
-      row.appendChild(acts);
-      row.title = 'Click to open this worker’s transcript here';
-      row.onclick = () => { if (state.finOpen.has(w.id)) state.finOpen.delete(w.id); else state.finOpen.add(w.id); renderWorkers(); };
-      item.appendChild(row);
-      listEl.appendChild(item);
-    }
-    const task = (w.task || '').split('\n')[0] || '(no description)';
-    const t = item.querySelector('.fin-task'); t.textContent = task; t.title = w.task || '';
-    const dur = fmtAgo((w.lastTs || 0) - (w.startTs || 0));
-    const ago = fmtAgo(Date.now() - (w.endTs || w.lastTs || Date.now()));
-    item.querySelector('.fin-meta').textContent = `${modelShort(w.model)} · ${dur} · ${w.toolCount} tools · ${fmtTok(w.outTokens)} out · finished ${ago} ago`;
-    const last = item.querySelector('.fin-last'); last.textContent = (w.lastText || '').replace(/\s+/g, ' ').slice(0, 180); last.title = w.lastText || '';
-    renderWorkLine(item.querySelector('.fin-work'), p, { branch: w.gitBranch, cwd: w.cwd });
-    const open = state.finOpen.has(w.id);
-    item.classList.toggle('open', open);
-    if (open) { const pane = ensurePane('worker', w.id, item, 'wk-pane fin-pane'); pane.el.style.cssText = 'display:flex;flex-direction:column;'; }
-    else { const pane = state.panes.get('worker:' + w.id); if (pane && pane.el.parentElement === item) pane.el.remove(); }
-  }
-  for (const item of [...listEl.children]) if (!wanted.has(item.dataset.id)) item.remove();
-}
-$('#fin-head').onclick = () => { state.finishedOpen = !state.finishedOpen; prefSet('mc.finishedOpen', state.finishedOpen); renderWorkers(); };
 
 // ───────────── header actions
 $('#btn-add').onclick = () => window.mc.addProject();
@@ -478,6 +422,7 @@ $('#btn-term').onclick = () => { const p = currentProject(); if (p) newTerminal(
 $('#btn-claude').onclick = () => { const p = currentProject(); if (p) launchClaude(p); };
 $('#btn-code').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openInCode(p.path); };
 $('#btn-folder').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openFolder(p.path); };
+$('#chk-finished').onchange = (e) => { state.showFinished = e.target.checked; renderWorkers(); };
 
 // session pane header: who this is (lead or plain session), and what they are on
 function renderSessionHead(pane, p, s, host) {
@@ -668,10 +613,9 @@ async function answerNote(n, answer) {
 // ───────────── data feed
 window.mc.onEnv((env) => { state.env = env;
   if (env.startView) setTimeout(() => {
-    // --view idle / --view workers open a part of the UI that is collapsed by default (not persisted: a flag, not a preference)
+    // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
     const p = currentProject(); if (!p) return;
-    if (env.startView === 'workers') { state.finishedOpen = true; $('#body').style.setProperty('--orch-h', '200px'); renderWorkers(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
