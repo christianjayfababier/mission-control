@@ -33,6 +33,7 @@
   const GROUPS = { rules: 'Rule files', agents: '.claude/agents', skills: '.claude/skills', commands: '.claude/commands' };
   const panes = new Map();      // projectKey -> pane state
   const open = { repo: true, kit: true, own: true };   // which sections are expanded (all of them, to start)
+  let rendering = false;        // true while render() rebuilds a pane: see ruleEditor's onblur
 
   // ───────── light markdown, by hand: headings, bold, inline code, fenced code, lists, links as text.
   // Everything is escaped before a single tag is added, so a rule file can hold any HTML it likes.
@@ -203,15 +204,18 @@
     const body = el('div', 'rl-sec-body');
 
     const add = el('div', 'rl-add');
-    const ta = el('textarea'); ta.rows = 2; ta.value = st.adding || '';
+    const ta = el('textarea', 'rl-addbox'); ta.rows = 2; ta.value = st.adding || '';
     ta.placeholder = 'A rule for this project — plain language. "Never touch the payments schema without asking me first."';
     const bt = el('button', 'btn primary small', 'Add rule'); bt.disabled = !String(st.adding || '').trim();
-    ta.oninput = () => { st.adding = ta.value; bt.disabled = !ta.value.trim(); };            // no re-render: the caret stays put
+    // The text lives in st.adding, not only in the DOM, so a rules push from disk cannot throw away a half-typed rule.
+    const remember = () => { st.adding = ta.value; st.addSel = ta.selectionStart; bt.disabled = !ta.value.trim(); };
+    ta.oninput = remember; ta.onkeyup = remember; ta.onclick = remember;
     ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); bt.onclick(); } };
+    if (st.refocus === 'add') { st.refocus = null; const at = st.addSel == null ? ta.value.length : st.addSel; setTimeout(() => { ta.focus(); try { ta.setSelectionRange(at, at); } catch { /* ignore */ } }, 0); }
     bt.onclick = async () => {
       const text = String(ta.value || '').trim(); if (!text) return;                          // rulesAdd ignores blank text anyway
       bt.disabled = true;
-      st.file = await api.add(st.p.path, text); st.adding = '';
+      st.file = await api.add(st.p.path, text); st.adding = ''; st.addSel = null;
       flash(st, 'added');
     };
     add.appendChild(ta); add.appendChild(bt); body.appendChild(add);
@@ -223,6 +227,9 @@
         + 'You can also tell the lead "save this as a rule" in a conversation and it will write one here itself.'));
     }
     list.forEach((r, i) => body.appendChild(ruleRow(st, r, i, list)));
+    // The push that just arrived may have removed the very rule being edited. Keep the editor and the owner's
+    // text rather than dropping both on the floor; the note under it says what happened.
+    if (st.editing && !list.some((x) => x.id === st.editing)) body.appendChild(orphanRow(st));
     body.appendChild(el('div', 'rl-note muted', 'New rules reach the lead at its next launch or resume. Use Tell the lead now to give a running lead a rule immediately.'));
     sec.appendChild(body);
     return sec;
@@ -237,15 +244,10 @@
     ord.appendChild(up); ord.appendChild(dn); row.appendChild(ord);
 
     const mid = el('div', 'rl-rule-mid');
-    if (st.editing === r.id) {
-      const ta = el('textarea', 'rl-edit'); ta.value = r.text; ta.rows = Math.min(8, Math.max(2, r.text.split('\n').length + 1));
-      const save = async () => { const v = ta.value.trim(); st.editing = null; if (v && v !== r.text) { st.file = await api.patch(st.p.path, r.id, { text: v }); } render(st); };
-      ta.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); st.editing = null; render(st); } else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); } };
-      ta.onblur = save;
-      mid.appendChild(ta); setTimeout(() => { ta.focus(); ta.selectionStart = ta.value.length; }, 0);
-    } else {
+    if (st.editing === r.id) mid.appendChild(ruleEditor(st, r));
+    else {
       const txt = el('div', 'rl-rule-text', r.text); txt.title = 'Click to edit';
-      txt.onclick = () => { st.editing = r.id; render(st); };
+      txt.onclick = () => { st.editing = r.id; st.draft = null; st.refocus = 'edit'; render(st); };
       mid.appendChild(txt);
     }
     const meta = el('div', 'rl-meta muted');
@@ -269,6 +271,53 @@
     const del = el('button', 'btn small', '✕'); del.title = 'Remove this rule';
     del.onclick = async () => { if (!confirm(`Remove ${r.id}?\n\n${r.text}`)) return; st.file = await api.remove(st.p.path, r.id); render(st); };
     acts.appendChild(del); row.appendChild(acts);
+    return row;
+  }
+
+  /** The inline editor for one rule. What the owner has typed lives in st.draft rather than only in the DOM, so a
+      rules push from disk (mc-board.js, another window) re-renders the list around the editor without losing it.
+      `orphan` is the editor for a rule that was removed while it was open: there is nothing left to save into. */
+  function ruleEditor(st, r, { orphan = false } = {}) {
+    const d = st.draft && st.draft.id === r.id ? st.draft : null;
+    const ta = el('textarea', 'rl-edit');
+    ta.value = d ? d.text : r.text;
+    ta.rows = Math.min(10, Math.max(2, ta.value.split('\n').length + 1));
+    const remember = () => { st.draft = { id: r.id, text: ta.value, sel: ta.selectionStart, end: ta.selectionEnd }; };
+    const close = () => { st.editing = null; st.draft = null; };
+    const save = async () => {
+      const v = ta.value.trim(), was = r.text;
+      close();
+      if (v && v !== was) st.file = await api.patch(st.p.path, r.id, { text: v });
+      render(st);
+    };
+    ta.oninput = remember; ta.onkeyup = remember; ta.onclick = remember;
+    ta.onkeydown = (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); render(st); }
+      else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (orphan) remember(); else save(); }
+    };
+    // Rebuilding the pane detaches this textarea, and Chromium fires blur when it does. That is not the owner
+    // leaving the field, so it must remember the text and stay open instead of saving half a sentence.
+    ta.onblur = () => { remember(); if (!rendering && !orphan) save(); };
+    if (st.refocus === 'edit') {
+      st.refocus = null;
+      const at = d && d.sel != null ? d.sel : ta.value.length, end = d && d.end != null ? d.end : at;
+      setTimeout(() => { if (st.editing !== r.id) return; ta.focus(); try { ta.setSelectionRange(at, end); } catch { /* ignore */ } }, 0);
+    }
+    return ta;
+  }
+  /** The editor left behind when the rule under it was removed on disk while the owner was typing in it. */
+  function orphanRow(st) {
+    const id = st.editing, draft = st.draft && st.draft.id === id ? st.draft.text : '';
+    const row = el('div', 'rl-rule');
+    row.appendChild(el('div', 'rl-ord'));                            // keeps the text column aligned with the rules above
+    const mid = el('div', 'rl-rule-mid');
+    mid.appendChild(ruleEditor(st, { id, text: draft }, { orphan: true }));
+    mid.appendChild(el('div', 'rl-meta muted', id + ' was removed elsewhere while you were editing it — your text is kept here. Copy it and add it again, or press Esc to discard it.'));
+    row.appendChild(mid);
+    const acts = el('div', 'rl-rule-acts');
+    const x = el('button', 'btn small', '✕'); x.title = 'Discard this text';
+    x.onclick = () => { st.editing = null; st.draft = null; render(st); };
+    acts.appendChild(x); row.appendChild(acts);
     return row;
   }
 
@@ -300,6 +349,15 @@
   }
 
   function render(st) {
+    // Whatever the owner is typing survives the rebuild: note which field has focus so the editor and the add box
+    // can put the caret back. Only ever set here, never cleared, so a click that asks for focus is not undone.
+    const act = document.activeElement;
+    const inField = act && st.el.contains(act) ? (act.classList.contains('rl-edit') ? 'edit' : act.classList.contains('rl-addbox') ? 'add' : null) : null;
+    if (inField) st.refocus = inField;
+    rendering = true;
+    try { paint(st); } finally { rendering = false; }
+  }
+  function paint(st) {
     st.el.innerHTML = '';
     const bar = el('div', 'rl-bar');
     const n = ((st.file && st.file.rules) || []).length;
