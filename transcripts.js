@@ -42,6 +42,42 @@ function summarizeToolInput(name, input) {
   return '';
 }
 
+// Files an agent touched (docs/EXPLORER-CONTRACT.md). Bash/PowerShell edits stay invisible on purpose:
+// only the file tools carry a path we can trust.
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const FILES_CAP = 100;
+/** The file path relative to an agent's cwd (forward slashes), or null when it lies outside cwd.
+    Case-insensitive and slash-agnostic, because cwd and the tool input disagree about both on Windows. */
+function relTo(cwd, filePath) {
+  if (!cwd || !filePath || typeof cwd !== 'string' || typeof filePath !== 'string') return null;
+  const base = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  const file = filePath.replace(/\\/g, '/');
+  if (!base) return null;
+  const b = base.toLowerCase(), f = file.toLowerCase();
+  if (f === b) return '';
+  if (!f.startsWith(b + '/')) return null;
+  return file.slice(base.length + 1);
+}
+/** One entry per (op, path): a repeated edit refreshes `ts` and moves the entry to the front (= the end
+    of the Map, which `filesOf` reverses). */
+function trackFile(agent, name, input, ts) {
+  if (!input || typeof input !== 'object') return;
+  const op = EDIT_TOOLS.has(name) ? 'edit' : name === 'Read' ? 'read' : null;
+  if (!op) return;
+  const p = input.file_path || input.notebook_path;
+  if (!p || typeof p !== 'string') return;
+  const key = op + '\0' + p;
+  agent.files.delete(key);
+  agent.files.set(key, { path: p, rel: relTo(agent.cwd, p), op, ts: ts || Date.now(), tool: name });
+  while (agent.files.size > FILES_CAP) agent.files.delete(agent.files.keys().next().value);
+}
+/** Newest first, at most FILES_CAP. `rel` is recomputed here because cwd can arrive after the first call. */
+function filesOf(agent) {
+  const out = [];
+  for (const f of agent.files.values()) out.push({ path: f.path, rel: relTo(agent.cwd, f.path), op: f.op, ts: f.ts, tool: f.tool });
+  return out.reverse().slice(0, FILES_CAP);
+}
+
 class Tailer {
   constructor(file) { this.file = file; this.offset = 0; this.buf = ''; this.mtime = 0; }
   read() {
@@ -80,6 +116,7 @@ class Session {
     this.model = null; this.outTokens = 0; this.toolCount = 0; this.gitBranch = null;
     this.pending = new Map(); this.spawns = new Map(); this.agentByToolUse = new Map();
     this.lastStop = null; this.lastLineType = null; this.startedAt = 0;
+    this.files = new Map(); // `${op}\0${path}` -> TouchedFile, oldest first
     this.buf = new LineBuffer();
   }
   apply(o, out) {
@@ -100,6 +137,7 @@ class Session {
         if (it.type === 'tool_use') {
           this.toolCount++;
           const desc = summarizeToolInput(it.name, it.input);
+          trackFile(this, it.name, it.input, ts);
           this.pending.set(it.id, { name: it.name, desc, ts });
           if (it.name === 'Agent' || it.name === 'Task') {
             const sp = { desc: (it.input && it.input.description) || '', type: (it.input && it.input.subagent_type) || 'general-purpose', ts };
@@ -147,6 +185,7 @@ class Session {
       id: this.id, title: this.title || (this.firstPrompt || '').slice(0, 120) || '(new session)', status: this.status,
       lastActivity: this.lastActivity, startedAt: this.startedAt, model: this.model, outTokens: this.outTokens, toolCount: this.toolCount,
       currentTool: ct ? `${ct.name} ${ct.desc || ''}`.trim() : null, lastText: (this.lastText || '').slice(0, 300), gitBranch: this.gitBranch, workerIds,
+      cwd: this.cwd, files: filesOf(this),
     };
   }
 }
@@ -156,6 +195,7 @@ class Worker {
     this.id = id; this.sessionId = sessionId; this.file = file; this.metaFile = metaFile; this.tailer = new Tailer(file);
     this.meta = null; this.startTs = 0; this.lastTs = 0; this.toolCount = 0; this.lastTool = null; this.lastText = ''; this.lastStop = null; this.lastLineType = null; this.outTokens = 0; this.model = null;
     this.pending = new Map(); this.buf = new LineBuffer(); this.sawPrompt = false; this.gitBranch = null; this.cwd = null; this.resumedAt = 0;
+    this.files = new Map(); // `${op}\0${path}` -> TouchedFile, oldest first
   }
   loadMeta() { if (this.meta) return; try { this.meta = JSON.parse(fs.readFileSync(this.metaFile, 'utf8')); } catch { this.meta = {}; } }
   apply(o, out) {
@@ -175,6 +215,7 @@ class Worker {
         if (it.type === 'tool_use') {
           this.toolCount++;
           const desc = summarizeToolInput(it.name, it.input);
+          trackFile(this, it.name, it.input, ts);
           this.lastTool = { name: it.name, desc, ts }; this.pending.set(it.id, this.lastTool);
           out.push(this.buf.push(ts, 'tool', `${it.name}  ${desc}`));
         }
@@ -210,7 +251,7 @@ class Worker {
       id: this.id, sessionId: this.sessionId, role: (this.meta && this.meta.agentType) || (sp && sp.type) || 'agent', task: (this.meta && this.meta.description) || (sp && sp.desc) || '',
       status: st, startTs: this.startTs, lastTs: this.lastTs, endTs: st === 'running' ? null : this.lastTs, toolCount: this.toolCount, outTokens: this.outTokens, model: this.model,
       lastTool: this.lastTool ? `${this.lastTool.name} ${this.lastTool.desc || ''}`.trim() : null, lastText: (this.lastText || '').slice(0, 300),
-      gitBranch: this.gitBranch, cwd: this.cwd,
+      gitBranch: this.gitBranch, cwd: this.cwd, files: filesOf(this),
     };
   }
 }
@@ -311,4 +352,4 @@ class TranscriptWatcher extends EventEmitter {
   }
 }
 
-module.exports = { TranscriptWatcher };
+module.exports = { TranscriptWatcher, relTo };

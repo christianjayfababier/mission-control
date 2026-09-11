@@ -14,6 +14,7 @@ const { CheckpointWriter } = require('./checkpoint');
 const { Settings, GitHub, gitInfo, parseRepo, Notes, keyOf } = require('./integrations');
 const { Boards } = require('./boards');
 const { PrWatch } = require('./prwatch');
+const explorer = require('./explorer');
 const team = require('./team');
 
 let pty = null, ptyError = null;
@@ -331,6 +332,14 @@ function unhideProject(p) { const st = seenStore(); const n = st.hidden.filter((
 ipcMain.handle('projects:hide', (_e, p) => { const st = seenStore(); if (p && !st.hidden.some((x) => norm(x) === norm(p))) { st.hidden.push(String(p)); saveSeen(); } sendSnapshot(); return true; });
 ipcMain.handle('open:code', (_e, p) => { try { spawn('cmd.exe', ['/c', 'code', p], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); return true; } catch (e) { return String(e); } });
 ipcMain.handle('open:folder', (_e, p) => shell.openPath(p));
+
+// ── explorer: files, git status, branches and branch diffs for the Explorer panel (docs/EXPLORER-CONTRACT.md).
+// Thin wrappers; explorer.js never throws, so a failure arrives as an `error` field the renderer draws.
+ipcMain.handle('explorer:list', (_e, { root, rel } = {}) => explorer.listDir(root, rel));
+ipcMain.handle('explorer:status', (_e, root) => explorer.status(root));
+ipcMain.handle('explorer:branches', (_e, root) => explorer.branches(root));
+ipcMain.handle('explorer:diff', (_e, { root, branch } = {}) => explorer.diff(root, branch));
+ipcMain.handle('open:file', (_e, { path: p, line } = {}) => explorer.openFile(p, line));
 
 // ── memory (per-project notes under ~/.claude/projects/<slug>/memory)
 function slugCandidates(projectPath, knownSlug) {
