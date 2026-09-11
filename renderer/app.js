@@ -118,7 +118,8 @@ function renderTabs() {
   lt.title = leadSess ? `${leadSess.status} · ${leadSess.title}` : 'Start or resume the lead session for this project';
   lt.onclick = () => activateTab('lead'); tabs.appendChild(lt);
   const counts = (window.Board && window.Board.counts(p)) || p.boardCounts || { tickets: 0, todos: 0 };
-  for (const [id, label, n] of [['tickets', 'Tickets', counts.tickets], ['todos', 'Todos', counts.todos]]) {
+  // Rules last: the project's own rule files, Mission Control's rulebook and the owner's rules (renderer/rules.js)
+  for (const [id, label, n] of [['tickets', 'Tickets', counts.tickets], ['todos', 'Todos', counts.todos], ['rules', 'Rules', p.ruleCount || 0]]) {
     const bt = el('div', 'tab board-tab' + (active === id ? ' active' : ''));
     bt.appendChild(el('span', null, label)); if (n) bt.appendChild(el('span', 'badge', String(n)));
     bt.onclick = () => activateTab(id); tabs.appendChild(bt);
@@ -151,6 +152,8 @@ function activateTab(id) {
     else { renderLeadPane(p).classList.add('active'); }
   } else if (id === 'tickets' || id === 'todos') {
     if (window.Board) window.Board.pane(id, p).classList.add('active');
+  } else if (id === 'rules') {
+    if (window.Rules) window.Rules.pane(p).classList.add('active');
   } else if (id.startsWith('sess:')) {
     const sid = id.slice(5);
     const pane = ensurePane('session', sid, $('#orch-body'), 'pane sess');
@@ -619,6 +622,8 @@ window.mc.onEnv((env) => { state.env = env;
     const p = currentProject(); if (!p) return;
     // --view explorer opens the Explorer panel; --view explorer-branches opens it on the Branches tab
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }
+    // --view rules opens the Rules tab and its viewer on the first rule file the repo actually has
+    if (env.startView === 'rules') { activateTab('rules'); if (window.Rules) window.Rules.openFromStartView(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
