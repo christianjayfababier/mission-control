@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "screenshot": "electron . --screenshot screenshot.png",
-    "test": "node test/smoke.js"
+    "test": "node test/unit.js && node test/smoke.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

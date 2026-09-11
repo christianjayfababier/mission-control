@@ -74,17 +74,17 @@ class PrWatch {
       if (!w.mergeSha || Date.now() - w.mergedAt > DEPLOY_TIMEOUT_MS) { w.stage = 'done'; continue; }
       const runs = await this.github.runsForCommit(repo.full, w.mergeSha, account);
       const deps = await this.github.deploymentsForCommit(repo.full, w.mergeSha, account);
-      const items = [...(runs || []).map((r) => ({ kind: 'workflow', name: r.name, done: r.status === 'completed', ok: r.conclusion === 'success' || r.conclusion === 'skipped' || r.conclusion === 'neutral', url: r.url })),
-        ...deps.map((d) => ({ kind: 'deployment', name: d.environment, done: ['success', 'failure', 'error', 'inactive'].includes(d.state), ok: d.state === 'success' || d.state === 'inactive', url: d.url }))];
+      const items = [...(runs || []).map((r) => ({ kind: 'workflow', name: r.name, done: r.status === 'completed', ok: r.conclusion === 'success' || r.conclusion === 'skipped' || r.conclusion === 'neutral', cancelled: r.conclusion === 'cancelled', url: r.url })),
+        ...deps.map((d) => ({ kind: 'deployment', name: d.environment, done: ['success', 'failure', 'error', 'inactive'].includes(d.state), ok: d.state === 'success' || d.state === 'inactive', cancelled: false, url: d.url }))];
       if (!items.length) {
         if (!w.deploy.notifiedNoRuns && Date.now() - w.mergedAt > NO_RUNS_AFTER_MS) { w.deploy.notifiedNoRuns = true; w.stage = 'done'; this.note(w.project || project, 'announcement', `PR #${num}: no CI/CD ran after the merge`, `No workflow runs or deployments were found for ${w.mergeSha.slice(0, 7)} within ten minutes. If this repo deploys another way, check production by hand.\n${w.url}`, { url: w.url }); }
         continue;
       }
       if (items.every((i) => i.done)) {
-        const fails = items.filter((i) => !i.ok);
-        const lines = items.map((i) => `${i.ok ? '✓' : '✗'} ${i.kind} ${i.name}${i.url ? ' ' + i.url : ''}`).join('\n');
-        if (fails.length) this.note(w.project || project, 'blocker', `PR #${num}: ${fails.length} of ${items.length} post-merge ${fails.length === 1 ? 'step' : 'steps'} failed`, `${lines}\nProduction may be affected. The orchestrator should investigate now.`, { url: w.url });
-        else this.note(w.project || project, 'announcement', `PR #${num} is live: ${w.title}`, `Every post-merge workflow and deployment for ${w.mergeSha.slice(0, 7)} succeeded.\n${lines}`, { url: w.url });
+        const v = postMergeVerdict(items);
+        if (v.verdict === 'failed') this.note(w.project || project, 'blocker', `PR #${num}: ${v.failed.length} of ${items.length} post-merge ${v.failed.length === 1 ? 'step' : 'steps'} failed`, `${v.lines}\nProduction may be affected. The orchestrator should investigate now.`, { url: w.url });
+        else if (v.verdict === 'superseded') this.note(w.project || project, 'announcement', `PR #${num} merged; ${v.cancelled.length} post-merge ${v.cancelled.length === 1 ? 'run was' : 'runs were'} cancelled by a newer push`, `${v.lines}\nA later push to the same branch superseded ${w.mergeSha.slice(0, 7)}; that push's own run is the one that tested what is live. Nothing failed.`, { url: w.url });
+        else this.note(w.project || project, 'announcement', `PR #${num} is live: ${w.title}`, `Every post-merge workflow and deployment for ${w.mergeSha.slice(0, 7)} succeeded.\n${v.lines}`, { url: w.url });
         w.stage = 'done';
       }
     }
@@ -94,4 +94,15 @@ class PrWatch {
   inflight(repoFull) { const st = this.state[repoFull] || {}; return Object.entries(st).filter(([, w]) => w.stage === 'open' || w.stage === 'merged').map(([n, w]) => ({ number: Number(n), stage: w.stage, checks: w.checks, title: w.title, url: w.url, branch: w.branch })); }
 }
 
-module.exports = { PrWatch };
+/** Verdict on the finished post-merge items of one merge commit. A cancelled workflow run is not a failure: GitHub
+ *  cancels a run when a newer push to the same branch supersedes it under a cancel-in-progress concurrency group (our
+ *  own smoke.yml did this when two PRs merged 44 s apart), and the newer push's run is what tested production. Real
+ *  failures (failure, timed_out, action_required, a failed deployment) stay blockers. Pure; covered by test/unit.js. */
+function postMergeVerdict(items) {
+  const failed = items.filter((i) => !i.ok && !i.cancelled);
+  const cancelled = items.filter((i) => i.cancelled);
+  const lines = items.map((i) => `${i.ok ? '✓' : i.cancelled ? '↷' : '✗'} ${i.kind} ${i.name}${i.cancelled ? ' (cancelled: superseded by a newer push)' : ''}${i.url ? ' ' + i.url : ''}`).join('\n');
+  return { verdict: failed.length ? 'failed' : cancelled.length ? 'superseded' : 'live', failed, cancelled, lines };
+}
+
+module.exports = { PrWatch, postMergeVerdict };

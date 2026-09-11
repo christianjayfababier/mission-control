@@ -80,7 +80,7 @@ State: `~/.claude/mission-control/projects.json` (added folders), `window.json` 
 
 ## Tests
 
-`npm test` runs `test/smoke.js` (plain Node, no dependencies): it boots the app in screenshot mode into a
+`npm test` runs `test/unit.js` (pure-function checks, milliseconds; today the PR watch's post-merge verdict) and then `test/smoke.js` (plain Node, no dependencies): it boots the app in screenshot mode into a
 throwaway Chromium profile, waits ~3.5 s (`SMOKE_WAIT` overrides), captures the window to a PNG in the
 system temp dir, and fails if Electron exits non-zero, the PNG is missing / tiny / not a PNG, or the
 renderer logged an error. In screenshot mode `main.js` forwards console errors, renderer crashes and
