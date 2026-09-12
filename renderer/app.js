@@ -178,7 +178,7 @@ async function newTerminal(p, { activate = true } = {}) {
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
   const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
-  term.onData((d) => { window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); });
+  term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
   if (activate) activateTab(ptyId); else renderTabs();
   return rec;
@@ -295,11 +295,46 @@ function renderLeadPane(p) {
   card.appendChild(foot);
   return pane;
 }
+// Claude Code's Windows TUI (2.1.269) keeps only the LAST 1024-byte ConPTY chunk of one write, so a message or a paste
+// over ~1000 characters loses its beginning. Anything long therefore goes out in small slices with a gap between them.
+// test/pty-paste-harness.js proves that against a real TUI; it repeats these three numbers and sliceForPty() verbatim.
+const PTY_SLICE = 512, PTY_SLICE_GAP = 25, PTY_ENTER_DELAY = 120;
+function sliceForPty(text, max = PTY_SLICE) {
+  const out = []; let i = 0;
+  while (i < text.length) {
+    let end = Math.min(i + max, text.length);
+    if (end < text.length) {
+      const c = text.charCodeAt(end - 1);
+      if (c >= 0xd800 && c <= 0xdbff) end -= 1; // never split a surrogate pair
+      const esc = text.lastIndexOf('\x1b', end - 1);
+      if (esc > i && end - esc < 16) end = esc; // never split an escape sequence
+    }
+    if (end <= i) end = Math.min(i + max, text.length); // always make progress
+    out.push(text.slice(i, end)); i = end;
+  }
+  return out;
+}
+/** Write text into a pty in slices the TUI keeps. Short text stays one write, so typing latency is unchanged. */
+function writeText(ptyId, text, { enter = false } = {}) {
+  const parts = sliceForPty(text);
+  const tail = () => (enter ? new Promise((res) => setTimeout(() => { window.mc.ptyWrite(ptyId, '\r'); res(); }, PTY_ENTER_DELAY)) : Promise.resolve());
+  if (parts.length <= 1) { if (text) window.mc.ptyWrite(ptyId, text); return tail(); }
+  return new Promise((resolve) => {
+    let i = 0;
+    const step = () => {
+      window.mc.ptyWrite(ptyId, parts[i++]);
+      if (i < parts.length) setTimeout(step, PTY_SLICE_GAP); else tail().then(resolve);
+    };
+    step();
+  });
+}
 function sendToSession(sid, text) {
   const t = hostOf(sid); if (!t) return false;
   const body = text.replace(/\r\n?/g, '\n');
-  window.mc.ptyWrite(t.ptyId, body.includes('\n') ? '\x1b[200~' + body + '\x1b[201~' : body); // bracketed paste keeps newlines from submitting early
-  setTimeout(() => window.mc.ptyWrite(t.ptyId, '\r'), 120);
+  if (body.includes('\n')) { // bracketed paste keeps newlines from submitting early; its markers go out as their own writes
+    window.mc.ptyWrite(t.ptyId, '\x1b[200~');
+    writeText(t.ptyId, body).then(() => { window.mc.ptyWrite(t.ptyId, '\x1b[201~'); setTimeout(() => window.mc.ptyWrite(t.ptyId, '\r'), PTY_ENTER_DELAY); });
+  } else writeText(t.ptyId, body, { enter: true });
   return true;
 }
 function refreshSessionFooters(p) {
