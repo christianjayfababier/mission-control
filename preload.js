@@ -49,6 +49,14 @@ contextBridge.exposeInMainWorld('mc', {
   boardPatch: (p, kind, id, patch) => ipcRenderer.invoke('board:patch', { path: p, kind, id, patch }),
   boardRemove: (p, kind, id) => ipcRenderer.invoke('board:remove', { path: p, kind, id }),
   onBoard: on('board'),
+  // team chat: the project's AI colleagues talking among themselves (docs/TEAM-CHAT-CONTRACT.md).
+  // Read-only — nothing here sends a message anywhere; "Send to lead" only pastes into the composer.
+  chatGet: (p) => ipcRenderer.invoke('chat:get', p),
+  chatSet: (p, patch) => ipcRenderer.invoke('chat:set', { path: p, patch }),
+  chatForwarded: (p, id) => ipcRenderer.invoke('chat:forwarded', { path: p, id }),
+  chatClear: (p) => ipcRenderer.invoke('chat:clear', p),
+  chatCandidates: (p) => ipcRenderer.invoke('chat:candidates', p),   // agents that could join + installed Ollama models
+  onChat: on('chat'),
   // owner rules per project, repo rule-file discovery and the viewer's reader (docs/RULES-CONTRACT.md)
   rulesGet: (p) => ipcRenderer.invoke('rules:get', p),
   rulesAdd: (p, text) => ipcRenderer.invoke('rules:add', { path: p, text }),

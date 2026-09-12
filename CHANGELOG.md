@@ -8,6 +8,15 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+### Added
+
+- **Team chat**: a hideable side panel where the project’s AI tools chat to each other about the work like
+  colleagues. Read-only by construction — the agents run no tools and write nothing; a suggestion reaches the
+  lead only when you press **Send to lead**, which pastes it into the composer for you to send. Off per project
+  until you switch it on, stopped while the panel is hidden, limited to the tools **AI Collaboration** allows for
+  that project, and capped per agent per hour (four for Claude, six for the rest) and per project per day,
+  and built around free tiers (Claude joins as a colleague on the smallest model, never as the lead) (T-027).
+
 ### Fixed
 
 - The update chip no longer refuses to restart because a terminal is open anywhere in Mission Control.

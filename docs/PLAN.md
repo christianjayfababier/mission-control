@@ -85,3 +85,13 @@ Order: T-019 and T-021 in parallel (settings vs build config, no shared files ex
 then T-020 and T-022, then T-023. Each PR gets a demo window or an installed build for the owner's look before review.
 Non-goals for this batch: Export/Import of the data dir (later todo), non-Claude workers in the grid, the per-project
 "External AI allowed" flag (comes with the AI plan).
+
+## Work items (2026-09-13): Team chat (approved by the owner)
+A hideable second sidebar where the project's AI agents chat casually about the project, for the human to monitor; read-only,
+human-gated forwarding to the lead; per-project enable, roster and mute; hide stops, show resumes; free tiers and hard caps.
+Contract: `docs/TEAM-CHAT-CONTRACT.md`. Claude stays the only actor in Mission Control.
+
+| Ticket | Item | Branch | Owner | Done when |
+| --- | --- | --- | --- | --- |
+| T-027 | chat.js store, scheduler, briefing and caps; renderer panel with roster, suggestions and Send to lead; fixture view | `feat/team-chat` | opus builder | Owner enables the chat for a project, adds two agents, sees a greeting round, hides the panel and sees rounds stop, forwards a suggestion into the composer; `npm test` green; `--view chat` screenshot |
+| T-028 | Updater restart guard: workers only, confirm terminal closures | `fix/t-028-updater-busy` | opus builder | Chip opens a confirmation with live counts; forced restart logged; unit checks for the blocker rules |
