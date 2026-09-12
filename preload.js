@@ -1,5 +1,7 @@
 'use strict';
 const { contextBridge, ipcRenderer } = require('electron');
+// The dialog validates as you type with the same rules main.js enforces (newproject-lib.js), never a second copy.
+const { validateProjectName, parseRepoInput } = require('./newproject-lib');
 
 const on = (channel) => (cb) => { const h = (_e, payload) => cb(payload); ipcRenderer.on(channel, h); return () => ipcRenderer.removeListener(channel, h); };
 
@@ -12,6 +14,13 @@ contextBridge.exposeInMainWorld('mc', {
   addProject: () => ipcRenderer.invoke('projects:add'),
   removeProject: (p) => ipcRenderer.invoke('projects:remove', p),
   hideProject: (p) => ipcRenderer.invoke('projects:hide', p), // unpinned project: stays in seen-projects.json, leaves the sidebar
+  // add/create a project: folder picker, new folder, clone from GitHub (renderer/newproject.js)
+  pickFolder: (title) => ipcRenderer.invoke('dialog:pickFolder', { title }),
+  createProject: (opts) => ipcRenderer.invoke('projects:create', opts),
+  cloneProject: (opts) => ipcRenderer.invoke('projects:clone', opts),
+  onProjectCloned: on('project:cloned'),
+  validateProjectName: (n) => validateProjectName(n),   // null when the name is usable, else why not
+  parseRepoInput: (s) => parseRepoInput(s),             // { owner, name, full, url } or null
   openInCode: (p) => ipcRenderer.invoke('open:code', p),
   openFolder: (p) => ipcRenderer.invoke('open:folder', p),
   openPath: (p) => ipcRenderer.invoke('open:path', p),
