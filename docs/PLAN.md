@@ -1,6 +1,6 @@
 # Plan — Mission Control
 
-Owner: Christian. Lead: Skye. Updated 2026-09-12 (evening).
+Owner: Christian. Lead: Skye. Updated 2026-09-12 (afternoon: installer batch proposed).
 
 ## Goal
 Every project opened in Mission Control gets a lead that recalls the project from its memory
@@ -60,3 +60,28 @@ format. No automatic merging.
 - Kit changes reach leads only after an app restart; running leads keep the old prompt.
 - node-pty may fail to build on CI; the smoke test must pass with terminals unavailable.
 - The three branches touch `main.js` and `renderer/app.js` in different regions; merge in the order above.
+
+## Work items (2026-09-12, afternoon): Installer, Accounts & AI settings, updates (awaiting the owner's approval)
+Goal: a second owner installs Mission Control from a `.exe`, logs in to Claude, GitHub and any AI CLI they own from a
+Settings screen, adds a project, and gets the same lead workflow (Recall, plan, workers, rules, board, handover) that this
+repo runs today. Updates ship from GitHub and install on restart. The kit is unchanged: it already defines the workflow,
+and `ensureKit` copies it into the data dir at every start, so a fresh install behaves like this machine minus the memory,
+which the Recall rebuilds (repo map worker, empty board, first handover).
+
+Decisions to confirm (decision notes in the inbox): packaging with `electron-builder` (NSIS, per-user, no admin) and
+`electron-updater` as the only new dependencies; a public releases-only repo (`mission-control-releases`) for installers and auto-update, created after the owner has
+tried the installer locally; the source repo stays private; unsigned builds for now (SmartScreen warns
+once) unless the owner buys a code-signing certificate.
+
+| Ticket | Item | Branch | Owner | Done when |
+| --- | --- | --- | --- | --- |
+| T-019 | Provider registry and **Accounts & AI** settings: `providers.js` (Claude, GitHub CLI, Codex, Gemini, others: detect, login command, key env var, winget id); status per provider; "Log in" opens an embedded terminal with the provider's login flow; API keys encrypted with Electron `safeStorage` into `secrets.json`; keys and tokens injected per PTY like `GH_TOKEN` today | `feat/accounts-settings` | opus builder A | Screenshot `--view accounts` shows every provider with installed/logged-in state; a key saved in the tab appears in a new terminal's env and never in plain text on disk; unit tests for the registry and env assembly |
+| T-020 | First-run **Setup** wizard: prerequisites (Node, Git, GitHub CLI, Claude Code) with winget install buttons, accounts step (reuses T-019), add first project, explains the lead workflow; re-openable from Settings | `feat/setup-wizard` | opus builder B after T-019 | Screenshot `--view setup` on an empty data dir shows the wizard; with everything present it is skipped; the kit is copied and the first Recall runs on the added project |
+| T-021 | Packaging: `electron-builder` NSIS per-user installer, `asarUnpack` for node-pty, kit read from app resources, `npm run dist`; release workflow on tag `v*` on windows-latest uploading the installer to the releases repo | `feat/installer` | opus builder C (parallel, disjoint files) | Installer built on CI; installed on a clean Windows Sandbox: app starts, terminals work, kit lands in the data dir, `npm test` unaffected |
+| T-022 | Auto-update: `electron-updater` against the releases repo; "Update ready, restart to install" banner; never restarts while a lead or worker is running; manual "Check for updates" in Settings | `feat/auto-update` | builder C after T-021 | A test release with a bumped version is offered, installs on restart, sessions and data dir survive |
+| T-023 | Docs: README Install and Updates sections, `CHANGELOG.md`, first-run guide for a second owner; progress board flips (D-009) | `feat/installer` | Skye | A person who has never seen the repo installs and reaches the first Recall from the README alone |
+
+Order: T-019 and T-021 in parallel (settings vs build config, no shared files except `package.json` scripts, owned by C),
+then T-020 and T-022, then T-023. Each PR gets a demo window or an installed build for the owner's look before review.
+Non-goals for this batch: Export/Import of the data dir (later todo), non-Claude workers in the grid, the per-project
+"External AI allowed" flag (comes with the AI plan).

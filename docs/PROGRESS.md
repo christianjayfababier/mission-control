@@ -1,6 +1,6 @@
 # Progress — Mission Control
 
-Mirror of the Tickets board with evidence. Updated 2026-09-12 (morning, after PR #6) by Skye.
+Mirror of the Tickets board with evidence. Updated 2026-09-12 (noon, installer batch) by Skye.
 
 | Ticket | Status | Branch / PR | Evidence |
 | --- | --- | --- | --- |
@@ -21,4 +21,5 @@ Mirror of the Tickets board with evidence. Updated 2026-09-12 (morning, after PR
 | T-015 Kit paragraph and README | done | [PR #6](https://github.com/christianjayfababier/mission-control/pull/6) merged 52d7a3f | kit section 6d; README Rules paragraph |
 | T-016 PR strip pushes header and Orchestrator off-screen | done | [PR #7](https://github.com/christianjayfababier/mission-control/pull/7) merged 6bf6f55 | CDP measurement: right column 7945px before, window width after, at 1600px and 3424px; strip wraps to two rows + "+N more"; re-measures on resize |
 | T-017 Sidebar horizontal scrollbar and inbox tag overflow | done | [PR #7](https://github.com/christianjayfababier/mission-control/pull/7) merged 6bf6f55 | CDP measurement with injected 56-char name and 148-char title: no overflow, cards never shrink, Dismiss visible |
-| T-018 Composer messages over ~1000 chars lose their beginning | in review | fix/t-018-composer-chunking | `test/pty-paste-harness.js` against a real TUI: one-write 1500 TRUNCATED (kept 536 chars), sliced 1500/2500, bracketed 1500 and multi-line 1500 all INTACT; `npm test` exit 0 |
+| T-018 Composer messages over ~1000 chars lose their beginning | done | [PR #8](https://github.com/christianjayfababier/mission-control/pull/8) merged ad2c780 | `test/pty-paste-harness.js` against a real TUI: one-write 1500 TRUNCATED (kept 536 chars), sliced 1500/2500, bracketed 1500 and multi-line 1500 all INTACT; `npm test` exit 0 |
+| T-021 Packaging: NSIS per-user installer and release workflow | in review | feat/installer | npm test exit 0; npm run dist 46 s, 92.5 MB exe; silent install, installed exe screenshot with no renderer errors, kit files refreshed, terminal opened via debug port, clean uninstall; owner installed it and saw their projects |

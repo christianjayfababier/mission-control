@@ -1,0 +1,38 @@
+name: release
+
+# Tag a commit `vX.Y.Z` and push the tag to build the Windows installer and open a draft release.
+# The build is unsigned: SmartScreen warns once per version until the owner has a code-signing cert.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # node-pty ships N-API prebuilds that load under Electron as they are, so package.json sets
+      # npmRebuild false on purpose: its tarball has no winpty sources, and a rebuild fails at gyp.
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mission-Control-Setup
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error
+      - name: Draft the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/*.exe dist/*.blockmap --draft --title "Mission Control $TAG" --generate-notes

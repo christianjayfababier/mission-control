@@ -1,0 +1,2 @@
+# The generated installer icon is binary: never let core.autocrlf touch it.
+*.ico binary
