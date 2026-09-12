@@ -916,6 +916,240 @@ check('diag.js loads in a plain node process, with no Electron anywhere near it'
   assert.equal(out.trim(), 'function function t pid=9 info ok');
 });
 
+// ── team chat (docs/TEAM-CHAT-CONTRACT.md, T-027): the four pure pieces, the store and the run step
+const chat = require('../chat.js');
+
+check('briefing: the house rules, the answer format and the project all reach the agent', () => {
+  const b = chat.buildBriefing({ persona: { name: 'Astra', specialty: 'Gemini, research and docs' }, project: 'MissionControl', goal: 'A lead per project.', tickets: ['T-027 Team chat panel [in-progress]'], messages: [] });
+  assert.match(b, /You are Astra \(Gemini, research and docs\)/);
+  assert.match(b, /"kind":"chat\|suggestion\|joke"/);
+  assert.match(b, /\{"kind":"skip"\}/);
+  assert.match(b, /Never claim you did any work/);
+  assert.match(b, /T-027 Team chat panel/);
+  assert.match(b, /A lead per project\./);
+});
+check('briefing: it stays inside the budget, dropping the history before the goal', () => {
+  const long = (tag) => Array.from({ length: 40 }, (_, i) => `${tag} line ${i} ${'lorem ipsum dolor sit amet '.repeat(4)}`);
+  const b = chat.buildBriefing({ persona: { name: 'Dax', specialty: 'Claude' }, project: 'p', goal: 'THE GOAL PARAGRAPH.', tickets: long('ticket'), todos: long('todo'), journal: long('journal'), messages: long('msg').map((t, i) => ({ name: 'N', text: t, agent: 'claude', id: String(i) })) });
+  assert.ok(b.length <= chat.BRIEF_BUDGET, 'briefing is ' + b.length + ' chars');
+  assert.match(b, /THE GOAL PARAGRAPH\./);          // the goal survives; the history is what goes
+  assert.doesNotMatch(b, /journal line 39/);
+});
+check('briefing: a key-shaped string in the project data is redacted, never handed to a tool', () => {
+  const b = chat.buildBriefing({ persona: { name: 'Dax', specialty: 'Claude' }, project: 'p', tickets: ['T-1 rotate sk-abcdefghijklmnopqrstuvwx now'], journal: ['09:00:00 token ghp_ABCDEFGHIJKLMNOPQRST leaked'], messages: [] });
+  assert.doesNotMatch(b, /sk-abcdefghij/);
+  assert.doesNotMatch(b, /ghp_ABCDEFGHIJ/);
+  assert.equal((b.match(/\[redacted\]/g) || []).length, 2);
+});
+
+check('parseReply: one JSON object anywhere in the output is the message', () => {
+  assert.deepEqual(chat.parseReply('{"kind":"chat","text":"Morning all."}'), { kind: 'chat', text: 'Morning all.' });
+  assert.deepEqual(chat.parseReply('thinking…\n```json\n{"kind":"suggestion","text":"Try caching it."}\n```\n'), { kind: 'suggestion', text: 'Try caching it.' });
+  assert.equal(chat.parseReply('{"kind":"joke","text":"A byte walked into a bar."}').kind, 'joke');
+});
+check('parseReply: no JSON falls back to the first real line, as a plain chat message', () => {
+  assert.deepEqual(chat.parseReply('\n\nQuiet morning on the board.\nsecond line\n'), { kind: 'chat', text: 'Quiet morning on the board.' });
+  assert.deepEqual(chat.parseReply('```\nFenced but plain.\n```'), { kind: 'chat', text: 'Fenced but plain.' });
+});
+check('parseReply: skip, empty output and an empty text all mean "nothing this round"', () => {
+  assert.equal(chat.parseReply('{"kind":"skip"}'), null);
+  assert.equal(chat.parseReply('skip'), null);
+  assert.equal(chat.parseReply('{"kind":"chat","text":"   "}'), null);
+  assert.equal(chat.parseReply(''), null);
+  assert.equal(chat.parseReply('\n \n'), null);
+});
+check('parseReply: an over-long message and a key-shaped one are dropped, not truncated', () => {
+  // spaces on purpose: a 400-character run with none is itself key-shaped, and dropped for that reason
+  const words = (n) => { let t = ''; while (t.length < n) t += 'lorem '; return t.slice(0, n).replace(/ $/, 'x'); };
+  assert.equal(chat.parseReply(JSON.stringify({ kind: 'chat', text: words(401) })), null);
+  assert.equal(chat.parseReply(JSON.stringify({ kind: 'chat', text: words(399) })).text.length, 399);
+  assert.equal(chat.parseReply(JSON.stringify({ kind: 'chat', text: 'x'.repeat(399) })), null);   // one long run = key-shaped
+  assert.equal(chat.parseReply('{"kind":"chat","text":"use sk-abcdefghijklmnopqrst for that"}'), null);
+  assert.equal(chat.parseReply('the token is ghp_ABCDEFGHIJKLMNOPQRSTUV'), null);
+});
+check('parseReply: an unknown or system kind is demoted to chat — only the app writes system lines', () => {
+  assert.equal(chat.parseReply('{"kind":"system","text":"Dax joined"}').kind, 'chat');
+  assert.equal(chat.parseReply('{"kind":"shout","text":"hi"}').kind, 'chat');
+});
+
+const AGENTS = { roster: ['claude', 'gemini', 'ollama'], capPerAgentPerHour: 6, capPerProjectPerDay: 80 };
+check('nextAgent: round-robin from whoever spoke last, and back round the roster', () => {
+  assert.equal(chat.nextAgent({ ...AGENTS }), 'claude');
+  assert.equal(chat.nextAgent({ ...AGENTS, last: 'claude' }), 'gemini');
+  assert.equal(chat.nextAgent({ ...AGENTS, last: 'ollama' }), 'claude');
+  assert.equal(chat.nextAgent({ ...AGENTS, roster: [] }), null);
+});
+check('nextAgent: muted, capped and not-ready agents are skipped; unknown readiness is not a refusal', () => {
+  assert.equal(chat.nextAgent({ ...AGENTS, muted: ['gemini'], last: 'claude' }), 'ollama');
+  assert.equal(chat.nextAgent({ ...AGENTS, perAgent: { gemini: 6 }, last: 'claude' }), 'ollama');
+  assert.equal(chat.nextAgent({ ...AGENTS, ready: { gemini: false }, last: 'claude' }), 'ollama');
+  assert.equal(chat.nextAgent({ ...AGENTS, ready: { gemini: null }, last: 'claude' }), 'gemini');
+  assert.equal(chat.nextAgent({ ...AGENTS, muted: ['claude', 'gemini', 'ollama'] }), null);
+});
+check('nextAgent: the project cap silences everyone for the rest of the day', () => {
+  assert.equal(chat.nextAgent({ ...AGENTS, today: 80 }), null);
+  assert.equal(chat.nextAgent({ ...AGENTS, today: 79 }), 'claude');
+});
+check('restingAgents: exactly the ones at or over the hourly cap', () => {
+  assert.deepEqual(chat.restingAgents({ claude: 6, gemini: 2 }, 6), ['claude']);
+  assert.deepEqual(chat.restingAgents({ claude: 6 }, 0), []);
+});
+
+const CHAT_ON = { enabled: true, visible: true, hasWindow: true, interval: 4 * 60000 };
+check('shouldRound: off, hidden or window-less means no round, and says which', () => {
+  assert.match(chat.shouldRound({ ...CHAT_ON, enabled: false }).reason, /chat is off/);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, enabled: false }).run, false);
+  assert.match(chat.shouldRound({ ...CHAT_ON, visible: false }).reason, /panel is hidden/);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, visible: false }).run, false);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, hasWindow: false }).run, false);
+});
+check('shouldRound: the jittered interval has to elapse', () => {
+  const now = 10 * 60000;
+  assert.equal(chat.shouldRound({ ...CHAT_ON, now, lastRoundAt: now - 3 * 60000 }).run, false);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, now, lastRoundAt: now - 5 * 60000 }).run, true);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, now, lastRoundAt: now - 5 * 60000 }).reason, 'interval');
+});
+check('shouldRound: an event jumps the queue, but only one event round every two minutes', () => {
+  const now = 60 * 60000;
+  const ev = { ...CHAT_ON, now, lastRoundAt: now, pendingEvent: 'T-027 moved to in-progress' };
+  assert.deepEqual(chat.shouldRound({ ...ev, lastEventRoundAt: now - 3 * 60000 }), { run: true, reason: 'event' });
+  const coalesced = chat.shouldRound({ ...ev, lastEventRoundAt: now - 30000 });
+  assert.equal(coalesced.run, false);
+  assert.match(coalesced.reason, /coalesced/);
+});
+check('shouldRound: MC_CHAT_ROUND_NOW (force) skips the wait but never the off/hidden check', () => {
+  const now = 60 * 60000;
+  assert.equal(chat.shouldRound({ ...CHAT_ON, now, lastRoundAt: now, force: true }).run, true);
+  assert.equal(chat.shouldRound({ ...CHAT_ON, now, visible: false, lastRoundAt: 0, force: true }).run, false);
+});
+
+// ── the store: one jsonl per project, the boards.js conventions
+const chatDir = path.join(tmp, 'chat');
+const CHAT_PROJ = 'C:\\ClaudeApps\\MissionControl';
+check('ChatStore: a missing file is an empty chat, and append round-trips', () => {
+  const st = new chat.ChatStore(chatDir);
+  assert.deepEqual(st.read(CHAT_PROJ), []);
+  const m = st.append(CHAT_PROJ, { agent: 'claude', name: 'Dax', kind: 'chat', text: 'Morning.' });
+  assert.match(m.id, /^c/); assert.match(m.ts, /^\d{4}-\d{2}-\d{2}T/);
+  const back = st.read(CHAT_PROJ);
+  assert.equal(back.length, 1);
+  assert.deepEqual({ agent: back[0].agent, name: back[0].name, kind: back[0].kind, text: back[0].text }, { agent: 'claude', name: 'Dax', kind: 'chat', text: 'Morning.' });
+  assert.equal(path.basename(st.file(CHAT_PROJ)), 'c-claudeapps-missioncontrol.jsonl');
+});
+check('ChatStore: a half-written line is skipped, not fatal', () => {
+  const st = new chat.ChatStore(chatDir);
+  fs.appendFileSync(st.file(CHAT_PROJ), '{"id":"broken","ts":\n');
+  st.append(CHAT_PROJ, { agent: 'gemini', name: 'Astra', kind: 'joke', text: 'A byte walked in.' });
+  const back = st.read(CHAT_PROJ);
+  assert.equal(back.length, 2);
+  assert.equal(back[1].kind, 'joke');
+});
+check('ChatStore: append redacts a key and clips to 400 chars — the store is never a leak', () => {
+  const st = new chat.ChatStore(path.join(chatDir, 'redact'));
+  const m = st.append(CHAT_PROJ, { agent: 'claude', name: 'Dax', kind: 'chat', text: 'key sk-abcdefghijklmnopqrstuv ' + 'y'.repeat(500) });
+  assert.doesNotMatch(m.text, /sk-abcdefghij/);
+  assert.ok(m.text.length <= 400);
+});
+check('ChatStore: prune drops everything older than 30 days and keeps the rest in order', () => {
+  const st = new chat.ChatStore(path.join(chatDir, 'prune'));
+  const now = Date.parse('2026-09-13T10:00:00.000Z');
+  const at = (days, text) => st.append(CHAT_PROJ, { ts: new Date(now - days * 24 * 3600e3).toISOString(), agent: 'claude', name: 'Dax', kind: 'chat', text });
+  at(40, 'ancient'); at(31, 'old'); at(2, 'recent'); at(0, 'now');
+  assert.equal(st.prune(CHAT_PROJ, 30, now), 2);
+  assert.deepEqual(st.read(CHAT_PROJ).map((m) => m.text), ['recent', 'now']);
+  assert.equal(st.prune(CHAT_PROJ, 30, now), 0);      // idempotent
+});
+check('ChatStore: clear moves the file to .bak instead of deleting it; forwarded marks one message', () => {
+  const st = new chat.ChatStore(path.join(chatDir, 'clear'));
+  const m = st.append(CHAT_PROJ, { agent: 'claude', name: 'Dax', kind: 'suggestion', text: 'Cache the branch list.' });
+  assert.equal(st.forwarded(CHAT_PROJ, m.id, '2026-09-13T11:00:00.000Z').forwarded, '2026-09-13T11:00:00.000Z');
+  assert.equal(st.read(CHAT_PROJ)[0].forwarded, '2026-09-13T11:00:00.000Z');
+  assert.equal(st.forwarded(CHAT_PROJ, 'nope'), null);
+  const r = st.clear(CHAT_PROJ);
+  assert.equal(r.ok, true);
+  assert.equal(fs.existsSync(st.file(CHAT_PROJ)), false);
+  assert.equal(fs.existsSync(st.file(CHAT_PROJ) + '.bak'), true);
+  assert.deepEqual(st.read(CHAT_PROJ), []);
+  assert.deepEqual(st.clear(CHAT_PROJ), { ok: true, moved: null });   // nothing to move the second time
+});
+check('ChatStore: the caps are counted from the file — per agent per hour, per project per day', () => {
+  const st = new chat.ChatStore(path.join(chatDir, 'caps'));
+  const now = new Date(); now.setHours(12, 0, 0, 0);
+  const at = (minsAgo, agent, kind = 'chat') => st.append(CHAT_PROJ, { ts: new Date(now.getTime() - minsAgo * 60000).toISOString(), agent, name: 'N', kind, text: 'x' });
+  at(10, 'claude'); at(20, 'claude'); at(90, 'claude'); at(5, 'gemini'); at(1, 'gemini', 'system');
+  const c = st.counts(CHAT_PROJ, now.getTime());
+  assert.deepEqual(c.agent, { claude: 2, gemini: 1 });   // the 90-minute-old one is out of the hour
+  assert.equal(c.today, 4);                              // the system line is not an agent's turn
+});
+
+// ── the run step: the chat's own Claude template, and which tools read stdin
+check('execPlan: Claude in the chat runs the cheapest model, and the registry exec is untouched', () => {
+  const p = chat.execPlan('claude', { settings: chat.DEFAULTS(), resolve: () => 'C:\\npm\\claude.CMD' });
+  assert.deepEqual(p.args, ['-p', '--model', 'haiku']);
+  assert.equal(p.stdin, true);
+  assert.equal(p.bin, 'C:\\npm\\claude.CMD');
+  assert.equal(prov.byId('claude').exec, 'claude -p "{prompt}"');   // the owner's terminals still get this
+});
+check('execPlan: Ollama refuses to run without a model, and takes the prompt as an argument', () => {
+  assert.match(chat.execPlan('ollama', { settings: chat.DEFAULTS(), resolve: () => 'ollama.exe' }).error, /pick an Ollama model/);
+  const s = chat.normalizeSettings({ model: { ollama: 'llama3.2' } });
+  const p = chat.execPlan('ollama', { settings: s, resolve: () => 'ollama.exe' });
+  assert.deepEqual(p.args, ['run', 'llama3.2', '{prompt}']);
+  assert.equal(p.stdin, false);
+});
+check('execPlan: a tool that is not installed, and one with no exec line, both say so instead of running', () => {
+  assert.match(chat.execPlan('gemini', { resolve: () => null }).error, /not installed/);
+  assert.match(chat.execPlan('goose', { resolve: () => 'goose.exe' }).error, /no non-interactive command/);
+  assert.match(chat.execPlan('nope', {}).error, /unknown provider/);
+});
+check('chatEnv strips the two variables that make a nested Claude refuse to start', () => {
+  assert.deepEqual(chat.chatEnv({ PATH: 'x', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli' }), { PATH: 'x' });
+});
+check('tokenize keeps a quoted argument in one piece', () => {
+  assert.deepEqual(chat.tokenize('agent -p "{prompt}" --output-format json'), ['agent', '-p', '{prompt}', '--output-format', 'json']);
+});
+check('parseOllamaList reads the model names out of `ollama list`', () => {
+  const out = 'NAME              ID            SIZE      MODIFIED\nllama3.2:latest   a80c4f17acd5  2.0 GB    2 days ago\nqwen2.5-coder:7b  2b0496514337  4.7 GB    3 weeks ago\n';
+  assert.deepEqual(chat.parseOllamaList(out), ['llama3.2:latest', 'qwen2.5-coder:7b']);
+  assert.deepEqual(chat.parseOllamaList(''), []);
+});
+check('normalizeSettings: the contract defaults, and nonsense from disk cannot break the scheduler', () => {
+  assert.deepEqual(chat.normalizeSettings(null), { enabled: false, visible: false, roster: [], muted: [], capPerAgentPerHour: 6, capPerProjectPerDay: 80, model: { claude: 'haiku', ollama: null } });
+  const s = chat.normalizeSettings({ enabled: 1, roster: ['claude', 'claude', 'not-a-tool'], capPerAgentPerHour: 'x', capPerProjectPerDay: 99999 });
+  assert.deepEqual(s.roster, ['claude']);
+  assert.equal(s.enabled, true);
+  assert.equal(s.capPerAgentPerHour, 6);
+  assert.equal(s.capPerProjectPerDay, 1000);
+});
+check('readGoal pulls the Goal paragraph out of a project docs/PLAN.md, and shrugs when there is none', () => {
+  const proj = path.join(tmp, 'chat-proj'); fs.mkdirSync(path.join(proj, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'docs', 'PLAN.md'), '# Plan\n\n## Goal\nEvery project gets a lead\nthat remembers.\n\n## Branching model\nnot this.\n');
+  assert.equal(chat.readGoal(proj), 'Every project gets a lead that remembers.');
+  assert.equal(chat.readGoal(path.join(tmp, 'nothing-here')), null);
+});
+check('readJournalTail takes the last lines of the machine-written journal, not its frontmatter', () => {
+  const mem = path.join(tmp, 'chat-mem'); fs.mkdirSync(mem, { recursive: true });
+  fs.writeFileSync(path.join(mem, 'mission-control-journal.md'), '---\nname: x\n---\n\n## 2026-09-13\n- 09:00:00 owner: start\n- 09:05:00 board · T-027 new → in-progress\n');
+  assert.deepEqual(chat.readJournalTail(mem, 8), ['09:00:00 owner: start', '09:05:00 board · T-027 new → in-progress']);
+  assert.deepEqual(chat.readJournalTail(path.join(tmp, 'nope'), 8), []);
+});
+check('the demo fixture the screenshot uses parses, and has a greeting, a joke and a suggestion', () => {
+  const msgs = chat.fixture(path.join(__dirname, 'fixtures', 'chat-demo.jsonl'));
+  assert.ok(msgs.length >= 12, 'fixture has ' + msgs.length + ' messages');
+  assert.equal(new Set(msgs.map((m) => m.agent)).size, 3);
+  for (const kind of ['system', 'joke', 'suggestion', 'chat']) assert.ok(msgs.some((m) => m.kind === kind), 'no ' + kind + ' in the fixture');
+  for (const m of msgs) { assert.ok(m.text.length <= 400); assert.equal(chat.looksSecret(m.text), false); }
+  assert.equal(chat.fixture(path.join(tmp, 'no-such-fixture.jsonl')), null);
+});
+check('the persona a message is stored with is the one renderer/persona.js draws for that provider id', () => {
+  // main.js writes the name, the renderer draws the avatar from the seed: both must read the same list,
+  // or a roster chip and its own messages would disagree about who just spoke.
+  const namesOf = (f) => JSON.parse('[' + /const NAMES = \[([\s\S]*?)\];/.exec(fs.readFileSync(f, 'utf8'))[1].replace(/'/g, '"') + ']');
+  assert.deepEqual(namesOf(path.join(__dirname, '..', 'chat.js')), namesOf(path.join(__dirname, '..', 'renderer', 'persona.js')));
+  assert.equal(chat.persona('claude').seed, 'chat:claude');
+  assert.match(chat.persona('gemini').specialty, /^Google Gemini CLI, /);
+});
+
 check('every module main.js and preload.js require must be in build.files, or the installed app dies on boot', () => {
   // PR #10 and #11 added providers.js, secrets.js, globalsettings.js and newproject-lib.js and never
   // added them to the electron-builder file list. `npm run dist` was happy; the packaged app threw

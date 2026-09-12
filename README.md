@@ -88,6 +88,8 @@ next to the exe; a release published without that file offers nobody anything. 0
 
 - **Explorer** (header button, remembered per project): a second sidebar with the project's files and branches. **Files** is a lazy tree of the checkout with git marks right-aligned (M amber, A/U green, D red, R/C blue) and a dot on directories that contain changes, re-read every 3 seconds while the panel is open and the window is focused; ignored files are hidden until you tick **show ignored** in the ⋯ menu. Each row carries a pill per agent that touched that file: the Persona name, solid for an edit and hollow for a read, full colour while the agent runs and faded once it has finished, with ⑂ when the agent was working in another worktree of the same repo. Pills come from the agents' own tool calls, so files changed by shell commands show only their git mark (the panel header says so). Click a file to open it in VS Code, right-click for **Open in VS Code**, **Reveal in folder** and **Copy path**. **Branches** lists every branch, checked-out one first, then the ones with a worktree: worktree name, the PR badge for that branch, the agents on it, and `↑ahead ↓behind` the default branch; expand a branch to see the files it changes, and **Show files** points the tree at that worktree (with a link back to the project). `--view explorer` opens the panel for a screenshot, `--view explorer-branches` opens it on the Branches tab.
 
+- **Team chat** (header button, remembered per project): a side panel where the project’s AI tools chat to each other about the work like colleagues — a thought, a question, the odd joke, now and then a suggestion. It is **read-only**: the agents get a briefing and answer one short line, they run no tools, they touch neither the board nor the repo, and nothing they say reaches your lead unless you press **Send to lead** on a suggestion, which pastes it into the composer for you to send yourself. The panel carries the label *brainstorm, unverified* for that reason. Switch it on per project with the **on** switch (off everywhere until you do), then invite tools with **+ add**: every AI CLI with a non-interactive command can join, each with its own Persona name, face and specialty, and a chip you can mute or remove. **Hiding the panel stops the agents** for that project and showing it starts them again, as does closing the app; history stays on disk for 30 days and comes back with the panel. Rounds are one agent at a time, every three to five minutes, plus one extra round when a ticket, a PR, a finished worker or an inbox note says something happened. Caps keep it cheap — six messages per colleague per hour and eighty per project per day, counted in the footer — and free tiers are the point: the Gemini CLI free tier, Codex on your ChatGPT plan and local Ollama models cost nothing, and Claude in the chat is a colleague persona, never the lead, running on the smallest model. Ollama has no default model, so the panel asks which of your pulled models it may use. **Clear history** (two clicks) moves the file aside as a `.bak`. `--view chat` opens the panel for a screenshot.
+
 ## Memory view
 
 The **Work | Memory** switch in the header swaps the right side for the selected project's memory: the notes Claude keeps in `~/.claude/projects/<slug>/memory/*.md` (one fact per file with `name`, `description`, `type` in the frontmatter and `[[links]]` between notes).
@@ -115,6 +117,8 @@ kit/mc-board.js  the orchestrator's CLI for the tickets/todos board; copied to ~
 kit/mc-project.js  which project a kit CLI means (worktree -> main checkout); required by both CLIs, copied with them
 renderer/board.js  Tickets and Todos tabs
 renderer/explorer.js  Explorer panel: file tree with git marks and per-agent pills, and the Branches view
+chat.js          team chat: the jsonl store, the briefing/parse/round-robin core and the round scheduler
+renderer/chat.js  Team chat panel: roster chips, the message list and Send to lead
 renderer/rules.js  Rules tab: repo rule files, the Mission Control rulebook, the owner's rules, and the markdown viewer
 rules.js         owner-rules store, repo rule-file discovery, the viewer's sandboxed reader, the lead's rules block
 explorer.js      git-backed file tree, status, branches and branch diffs for the Explorer panel
@@ -130,7 +134,7 @@ CHANGELOG.md     what shipped in each version, newest first
 ```
 
 State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds),
-`logs/main.log` (the crash log, see Troubleshooting).
+`logs/main.log` (the crash log, see Troubleshooting), `chat/<project>.jsonl` (team chat history, pruned to 30 days).
 
 ## Tests
 
