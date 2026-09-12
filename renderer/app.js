@@ -695,8 +695,21 @@ async function answerNote(n, answer) {
 })();
 
 // ───────────── data feed
+/** Run `fn` once a project is selected (`idle` needs none), giving up after about six seconds. */
+function startViewWhenReady(view, fn) {
+  let tries = 0;
+  const tick = () => {
+    tries++;
+    if (view === 'idle' || currentProject() || tries >= 12) { fn(); return; }
+    setTimeout(tick, 500);
+  };
+  setTimeout(tick, 1200);
+}
 window.mc.onEnv((env) => { state.env = env;
-  if (env.startView) setTimeout(() => {
+  // --view fired exactly once, 1.5 s in, and then did nothing at all when no project had been selected
+  // yet: on a busy machine the first snapshot lands later than that and the screenshot came out empty.
+  // Wait for a project instead, for up to six seconds.
+  if (env.startView) startViewWhenReady(env.startView, () => {
     // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
     const p = currentProject(); if (!p) return;
@@ -712,7 +725,7 @@ window.mc.onEnv((env) => { state.env = env;
     if (env.startView === 'ai') { if (window.Accounts) window.Accounts.openAi(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
-  }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
+  }); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();

@@ -40,6 +40,7 @@
     current = SECTIONS.some((s) => s.id === id) ? id : 'accounts';
     for (const b of document.querySelectorAll('.set-nav-btn')) b.classList.toggle('active', b.dataset.sec === current);
     for (const sec of document.querySelectorAll('.set-sec')) sec.hidden = sec.dataset.sec !== current;
+    const pane = $('#set-pane'); if (pane) pane.scrollTop = 0;    // a section always opens at its top
     if (current === 'accounts' && window.Accounts) window.Accounts.mount();
     else if (current === 'rules') loadRules();
     else if (current === 'hidden') loadHidden();

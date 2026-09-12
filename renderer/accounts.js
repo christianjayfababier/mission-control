@@ -105,9 +105,9 @@
     row.appendChild(mid);
 
     const ctl = el('div', 'acct-ctl');
-    if (!st || !st.installed) {
-      const b = el('button', 'btn small primary', 'Install'); b.title = p.install || ''; b.onclick = () => runInTerminal('install', p); ctl.appendChild(b);
-    } else if (p.login) {
+    if ((!st || !st.installed) && p.install) {
+      const b = el('button', 'btn small primary', 'Install'); b.title = p.install; b.onclick = () => runInTerminal('install', p); ctl.appendChild(b);
+    } else if (st && st.installed && p.login) {
       const b = el('button', 'btn small' + (st.loggedIn === false ? ' primary' : ''), st.loggedIn ? 'Log in again' : 'Log in');
       b.title = p.login; b.onclick = () => runInTerminal('login', p); ctl.appendChild(b);
     }
@@ -171,9 +171,32 @@
       for (const p of members) sec.appendChild(p.kind === 'key' ? keyRow(p, data.status[p.id]) : cliRow(p, data.status[p.id]));
       box.appendChild(sec);
     }
+    const none = el('div', 'muted'); none.id = 'acct-none'; none.hidden = true; box.appendChild(none);
+    applyFilter();                     // a redraw must not forget what the owner is filtering by
   }
 
   async function reload(force) { if (force) status('running the status probes…'); await load(force); render(); if (force) status('status refreshed'); }
+
+  /** Nineteen rows is a lot to read: hide the ones that do not match what the owner typed. */
+  function applyFilter() {
+    const box = $('#acct-groups'); const input = $('#acct-filter'); if (!box) return;
+    const q = ((input && input.value) || '').trim().toLowerCase();
+    const find = (id) => ((data && data.providers) || []).find((x) => x.id === id) || {};
+    let shownTotal = 0;
+    for (const sec of box.querySelectorAll('.acct-group')) {
+      let shown = 0;
+      for (const row of sec.querySelectorAll('.acct-row')) {
+        const p = find(row.dataset.provider);
+        const hay = [p.name, p.id, p.bin, p.envVar, p.blurb, ...(p.keys || [])].filter(Boolean).join(' ').toLowerCase();
+        const hit = !q || hay.includes(q);
+        row.hidden = !hit; if (hit) shown++;
+      }
+      sec.hidden = shown === 0;
+      shownTotal += shown;
+    }
+    const none = $('#acct-none');
+    if (none) { none.hidden = !(q && shownTotal === 0); none.textContent = q && !shownTotal ? `Nothing matches “${q}”.` : ''; }
+  }
 
   // ───────── AI Collaboration: the per-project provider list behind the header button
   // One short line per provider — the long version lives in Settings → Accounts & AI.
@@ -182,9 +205,21 @@
     github: 'Branches, PRs and this project’s token.',
     codex: 'OpenAI’s coding agent.',
     gemini: 'Google’s CLI agent.',
+    copilot: 'GitHub’s agent; it signs in with your GitHub account.',
+    cursor: 'Cursor’s terminal agent; its binary is `agent`.',
+    cline: 'Cline in the terminal, on the key you give it.',
+    opencode: 'A terminal agent with its own provider logins.',
+    aider: 'Pair programming in the terminal; keys only, no login.',
+    goose: 'Block’s local agent.',
+    ollama: 'Runs open models locally; no account, no key.',
     'anthropic-key': 'Used instead of the subscription login when set.',
     'openai-key': 'For Codex in API-key mode and OpenAI SDKs.',
     'gemini-key': 'Lets the Gemini CLI run without the browser login.',
+    'xai-key': 'Grok, for the tools that can be pointed at xAI.',
+    'mistral-key': 'Mistral models, for the tools that support them.',
+    'deepseek-key': 'DeepSeek models; Aider reads this one directly.',
+    'openrouter-key': 'One key for many models, through OpenRouter.',
+    'cursor-key': 'Lets the Cursor CLI run headless.',
   };
   const AI_HINT = { required: 'Mission Control’s own tools.', ai: 'Extra agents a worker may call.', keys: 'These are what actually get withheld.' };
   /** The renderer's copy of providers.readiness() (main process code cannot be required here).
@@ -221,6 +256,7 @@
     const d = $('#dlg-ai'); if (d && d.open) d.close();
     if (!window.Settings) return;
     window.Settings.open('accounts');
+    const f = $('#acct-filter'); if (f && f.value) { f.value = ''; applyFilter(); }   // never land on a hidden row
     setTimeout(() => {
       const row = document.querySelector(`.acct-row[data-provider="${id}"]`);
       if (!row) return;
@@ -306,6 +342,8 @@
 
   // ───────── wiring
   const refreshBtn = $('#acct-refresh'); if (refreshBtn) refreshBtn.onclick = () => reload(true);
+  const filterBox = $('#acct-filter');
+  if (filterBox) { filterBox.oninput = () => applyFilter(); filterBox.onsearch = () => applyFilter(); }
 
   /** settings.js calls this when the Accounts & AI section is shown: draw what we know, then refresh it. */
   async function mount() { render(); await load(false); render(); }
@@ -334,5 +372,5 @@
     });
   }
 
-  window.Accounts = { open, openAi, mount, api, projectChecklist, reload, state: () => data, hasBackend };
+  window.Accounts = { open, openAi, mount, api, projectChecklist, reload, applyFilter, state: () => data, hasBackend };
 })();

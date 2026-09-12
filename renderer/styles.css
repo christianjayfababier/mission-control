@@ -437,6 +437,8 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 /* Accounts & AI dialog (docs/ACCOUNTS-CONTRACT.md) — same shape as the team dialog: a scrolling list of
    rows inside a wide <dialog>. `display` is scoped to [open]; a bare .dlg.wide rule would keep it visible. */
 .acct-actions { display: flex; gap: 10px; align-items: center; }
+.acct-filter { flex: 0 0 220px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.acct-filter:focus { outline: none; border-color: var(--accent); }
 .acct-groups { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .acct-group { display: flex; flex-direction: column; gap: 6px; }
 .acct-group-head { display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
