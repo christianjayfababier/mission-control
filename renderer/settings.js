@@ -7,7 +7,9 @@
                           other path).
      Hidden projects    — the projects taken out of the sidebar, and the way back (hiddenProjects /
                           unhideProject).
-     About & diagnostics — version, the data directory and the kit files, all from the `env` payload.
+     About & diagnostics — version, the data directory and the kit files, all from the `env` payload,
+                          plus Check for updates: the same updater state machine the header chip shows
+                          (T-022), asked on demand and refreshed live while the dialog is open.
    Load order: … → rules.js → accounts.js → settings.js. It reads window.MC and window.Accounts lazily. */
 'use strict';
 (() => {
@@ -122,7 +124,43 @@
     line('Inbox script handed to every lead', env.noteScript);
     line('Terminals', env.ptyAvailable ? 'node-pty loaded' : 'unavailable: ' + (env.ptyError || 'node-pty failed to load'));
     line('Crash log', 'coming with T-024');
+    renderUpdates(box);
   }
+
+  // ───────── updates: one row inside About, fed by the same push the header chip listens to
+  /** The one line that says where the updater stands. `env.version` is what we are running now. */
+  function updateLine(u, env) {
+    if (!u) return 'Checking the updater…';
+    const mine = u.current || env.version || 'this build';
+    if (u.state === 'disabled') return `Updates are off in this run (${u.reason || 'not packaged'}). An installed Mission Control checks GitHub Releases.`;
+    if (u.state === 'checking') return 'Checking for updates…';
+    if (u.state === 'available') return `${u.version} downloading`;
+    if (u.state === 'downloading') return `${u.version} downloading ${u.percent}%`;
+    if (u.state === 'ready') return `${u.version} ready: restart to install` + (u.busy ? ' (close terminals and wait for workers first)' : '');
+    if (u.state === 'error') return u.error || 'the last check failed';
+    return u.checkedAt ? `You are on ${mine}, latest` : `You are on ${mine}. No check has run yet.`;
+  }
+  function renderUpdates(box) {
+    const env = envOf();
+    const row = el('div', 'set-row-item');
+    const who = el('div', 'set-row-who');
+    who.appendChild(el('div', 'set-row-name', 'Updates'));
+    const status = el('div', 'set-row-path mono', updateLine(window.MC && window.MC.updateState && window.MC.updateState(), env));
+    status.id = 'set-update-status';
+    who.appendChild(status);
+    row.appendChild(who);
+    const btn = el('button', 'btn small', 'Check for updates');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { onUpdate(await window.mc.updateCheck()); }
+      catch (e) { status.textContent = String((e && e.message) || e); }
+      finally { btn.disabled = false; }
+    };
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+  /** app.js forwards every push here, so the line moves while the dialog stays open. */
+  function onUpdate(u) { const s = $('#set-update-status'); if (s) s.textContent = updateLine(u, envOf()); }
 
   // ───────── wiring
   const cog = $('#btn-cog'); if (cog) cog.onclick = () => open();
@@ -131,6 +169,7 @@
   window.Settings = {
     open,
     show,
+    onUpdate,
     /** `--view settings`, `--view settings-rules`, `--view settings-hidden`, `--view settings-about`. */
     openFromStartView(view) { open(String(view || '').replace(/^settings-?/, '') || 'accounts'); },
     sections: SECTIONS,

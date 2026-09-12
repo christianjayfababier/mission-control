@@ -78,6 +78,7 @@ function renderSidebar() {
 function currentProject() { return (state.snapshot.projects || []).find((p) => p.key === state.selected) || null; }
 window.MC = {
   currentProject: () => currentProject(), state,
+  updateState: () => updateState,
   activateTab: (id) => activateTab(id),
   /** Show a pty the main process created (a provider login or install) as a terminal tab of this project. */
   adoptTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title, activate: true }),
@@ -588,6 +589,43 @@ function renderPrStrip(p) {
   if (strip.clientWidth > 0) { for (let guard = chips.length; guard > 0 && rowsUsed() > 2; guard--) { const c = chips.pop(); if (!c) break; c.remove(); rest++; showMore(); } }
   else while (chips.length > 8) { chips.pop().remove(); rest++; showMore(); }   // not laid out yet (hidden view): fall back to a fixed cap
 }
+// ───────────── auto-update (T-022, updater.js in the main process)
+// One chip left of the Work/Memory switch. It is not a progress bar and not a nag: it is hidden while
+// there is nothing to say, and the only thing it ever asks for is the moment to restart.
+const BUSY_TEXT = 'Close terminals and wait for workers first';
+let updateState = null;
+function updateLabel(u) {
+  if (!u) return '';
+  if (u.state === 'checking') return 'Checking for updates…';
+  if (u.state === 'available') return `Update ${u.version} downloading`;
+  if (u.state === 'downloading') return `Update ${u.version} downloading ${u.percent}%`;
+  if (u.state === 'ready') return `Update ${u.version} ready: restart to install`;
+  return '';
+}
+function renderUpdateChip() {
+  const chip = $('#update-chip'), note = $('#update-note'); if (!chip) return;
+  const u = updateState, text = updateLabel(u);
+  chip.hidden = !text;
+  if (!text) { chip.textContent = ''; if (note) { note.textContent = ''; note.hidden = true; } return; }
+  chip.textContent = text;
+  const ready = u.state === 'ready';
+  chip.classList.toggle('ready', ready);
+  chip.classList.toggle('busy', ready && !!u.busy);
+  chip.classList.toggle('working', u.state === 'checking' || u.state === 'downloading' || u.state === 'available');
+  chip.title = ready ? (u.busy ? BUSY_TEXT : `Restart Mission Control now and install ${u.version}.`)
+    : u.state === 'checking' ? `Asking GitHub Releases whether anything is newer than ${u.current}.`
+      : 'Downloading in the background. Mission Control never restarts on its own; it offers the restart here.';
+  if (note && !ready) { note.textContent = ''; note.hidden = true; }   // a stale refusal must not outlive the state it came from
+}
+// Never alert() from here: the renderer's blocking dialogs freeze the terminals behind them.
+$('#update-chip').onclick = async () => {
+  const note = $('#update-note'); if (!updateState || updateState.state !== 'ready') return;
+  const r = await window.mc.updateInstall();
+  if (r && r.error && note) { note.textContent = r.error === 'sessions are running' ? BUSY_TEXT : r.error; note.hidden = false; }
+};
+window.mc.onUpdate((u) => { updateState = u; renderUpdateChip(); if (window.Settings && window.Settings.onUpdate) window.Settings.onUpdate(u); });
+window.mc.updateState().then((u) => { updateState = u; renderUpdateChip(); }).catch(() => {});
+
 // settings dialog
 (() => {
   const dlg = $('#dlg-repo'); if (!dlg) return;

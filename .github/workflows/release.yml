@@ -19,6 +19,14 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      # The tag is what every installed copy will be told to download, so it has to name the version
+      # that is about to be built. Guard first: a mismatch costs seconds here, a bad latest.yml costs
+      # a release that every client re-downloads forever.
+      - name: Tag must match package.json
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node build/check-version.js "$TAG"
       - run: npm ci
       # node-pty ships N-API prebuilds that load under Electron as they are, so package.json sets
       # npmRebuild false on purpose: its tarball has no winpty sources, and a rebuild fails at gyp.
@@ -29,10 +37,13 @@ jobs:
           path: |
             dist/*.exe
             dist/*.blockmap
+            dist/latest.yml
           if-no-files-found: error
       - name: Draft the release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/*.exe dist/*.blockmap --draft --title "Mission Control $TAG" --generate-notes
+        # latest.yml is the update feed: electron-updater reads it from the release assets, so a release
+        # published without it ships an installer nobody's app will ever be offered.
+        run: gh release create "$TAG" dist/*.exe dist/*.blockmap dist/latest.yml --draft --title "Mission Control $TAG" --generate-notes
