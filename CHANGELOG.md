@@ -8,6 +8,8 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+## 0.2.2 - 2026-09-13
+
 ### Added
 
 - **Team chat**: a hideable side panel where the project’s AI tools chat to each other about the work like
