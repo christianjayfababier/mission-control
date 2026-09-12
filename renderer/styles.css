@@ -431,3 +431,41 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .ex-mi { padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; white-space: nowrap; }
 .ex-mi:hover { background: #223049; }
 .ex-err { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Accounts & AI dialog (docs/ACCOUNTS-CONTRACT.md) — same shape as the team dialog: a scrolling list of
+   rows inside a wide <dialog>. `display` is scoped to [open]; a bare .dlg.wide rule would keep it visible. */
+.acct-actions { display: flex; gap: 10px; align-items: center; }
+.acct-groups { overflow-y: auto; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.acct-group { display: flex; flex-direction: column; gap: 6px; }
+.acct-group-head { display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.acct-group-title { font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.acct-row { display: grid; grid-template-columns: 1.1fr 1.3fr auto; gap: 14px; align-items: center; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.acct-row.key { grid-template-columns: 1.1fr 1fr auto; }
+.acct-who { min-width: 0; }
+.acct-name { font-weight: 700; font-size: 12px; display: flex; align-items: baseline; gap: 8px; }
+.acct-ver { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted); }
+.acct-var { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--magenta); }
+.acct-blurb { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 2px; }
+.acct-path { font-family: var(--mono); font-size: 10px; color: #6e7681; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-mid { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.acct-status-line { display: flex; align-items: center; gap: 7px; font-size: 12px; min-width: 0; }
+.acct-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-err { color: var(--red); font-size: 11px; }
+.acct-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+.acct-dot.ok { background: var(--green); } .acct-dot.warn { background: var(--amber); }
+.acct-dot.bad { background: var(--red); } .acct-dot.off { background: #3d4a5e; } .acct-dot.unknown { background: var(--muted); }
+.acct-link { color: var(--accent); font-size: 11px; cursor: pointer; }
+.acct-link:hover { text-decoration: underline; }
+.acct-ctl { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.acct-ctl.key { display: grid; grid-template-columns: minmax(180px, 260px) auto auto; gap: 6px; }
+.acct-key { background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; font-family: var(--mono); font-size: 12px; min-width: 0; }
+.acct-key:focus { outline: none; border-color: var(--accent); }
+.acct-key:disabled { color: var(--muted); }
+.acct-warn { border: 1px solid var(--amber); border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.5; color: var(--amber); }
+
+/* "Providers this project may use", inside the Repo & account dialog */
+.prov-check { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.prov-check-head { font-size: 12px; font-weight: 700; }
+.prov-check-list { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; }
+.prov-chk { flex-direction: row !important; align-items: center; gap: 6px; font-size: 12px; color: var(--ink); }
+.prov-chk-var { font-family: var(--mono); font-size: 10px; color: var(--magenta); }

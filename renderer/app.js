@@ -78,6 +78,9 @@ function renderSidebar() {
 function currentProject() { return (state.snapshot.projects || []).find((p) => p.key === state.selected) || null; }
 window.MC = {
   currentProject: () => currentProject(), state,
+  activateTab: (id) => activateTab(id),
+  /** Show a pty the main process created (a provider login or install) as a terminal tab of this project. */
+  adoptTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title, activate: true }),
   /** Type a message into the project's lead session (or any Claude session hosted here). Returns the terminal title, or null. */
   sendToLead(p, msg) {
     let host = null; const lead = state.lead.get(p.key); if (lead) host = hostOf(lead);
@@ -166,7 +169,7 @@ function activateTab(id) {
 }
 
 // ───────────── terminals
-async function newTerminal(p, { activate = true } = {}) {
+async function newTerminal(p, { activate = true, ptyId: adopt = null, title = null } = {}) {
   if (!state.env.ptyAvailable) { alert('Terminals are unavailable: ' + (state.env.ptyError || 'node-pty failed to load')); return; }
   if (!state.terms.has(p.key)) state.terms.set(p.key, []); // claim the slot synchronously so a racing snapshot does not open a second terminal
   const container = el('div', 'pane term');
@@ -174,12 +177,15 @@ async function newTerminal(p, { activate = true } = {}) {
   const term = new Terminal({ theme: termTheme, fontFamily: '"Cascadia Mono", Consolas, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000, allowProposedApi: true });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(container); fit.fit();
-  const ptyId = await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
+  // `adopt` is a pty main.js already spawned (a provider login or install, docs/ACCOUNTS-CONTRACT.md):
+  // it is already running the command, so all this terminal does is attach a view to it.
+  const ptyId = adopt || await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
-  const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
+  const rec = { ptyId, term, fit, el: container, title: title || `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
   term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else ptySend(ptyId, () => window.mc.ptyWrite(ptyId, d)); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
+  if (adopt) { try { window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } }
   if (activate) activateTab(ptyId); else renderTabs();
   return rec;
 }
@@ -580,6 +586,7 @@ function renderPrStrip(p) {
     const sel = $('#f-account'); sel.innerHTML = '<option value="">Machine default (active gh account)</option>';
     try { for (const a of await window.mc.ghAccounts()) { const o = el('option', null, a.login + (a.active ? ' (active on this machine)' : '')); o.value = a.login; sel.appendChild(o); } } catch { /* gh missing */ }
     sel.value = s.ghAccount || '';
+    if (window.Accounts) window.Accounts.projectChecklist($('#repo-providers'), p.path);   // "Providers this project may use"
     dlg.dataset.path = p.path; dlg.showModal();
   };
   $('#f-account').onchange = () => { $('#f-name').value = ''; $('#f-email').value = ''; }; // let the account fill them in
@@ -698,6 +705,8 @@ window.mc.onEnv((env) => { state.env = env;
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }
     // --view rules opens the Rules tab and its viewer on the first rule file the repo actually has
     if (env.startView === 'rules') { activateTab('rules'); if (window.Rules) window.Rules.openFromStartView(); return; }
+    // --view accounts opens the Accounts & AI dialog on live probe results
+    if (env.startView === 'accounts') { if (window.Accounts) window.Accounts.open(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
