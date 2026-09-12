@@ -1,10 +1,11 @@
 /* Accounts & AI — the tools Mission Control and its workers run, and the keys they run with.
-   Header button "Accounts & AI" opens #dlg-accounts; the Repo & account dialog borrows
-   projectChecklist() for its "Providers this project may use" list. Data comes from the main process
-   over docs/ACCOUNTS-CONTRACT.md: window.mc.providersList / providersRefresh / providersLogin /
-   providersInstall / providersSetEnabled / secretSet / secretRemove / onProviders.
-   Load order: persona.js → app.js → explorer.js → board.js → rules.js → accounts.js. It reads window.MC
-   (app.js) lazily, and a key value only ever travels one way: into the main process, never back. */
+   Two homes: the Accounts & AI section of the global Settings dialog (the cog in the sidebar, owned by
+   settings.js, which calls mount() when that section is shown), and the per-project AI button in the
+   header, which opens #dlg-ai with the "providers this project may use" checklist. Data comes from the
+   main process over docs/ACCOUNTS-CONTRACT.md: window.mc.providersList / providersRefresh /
+   providersLogin / providersInstall / providersSetEnabled / secretSet / secretRemove / onProviders.
+   Load order: persona.js → app.js → explorer.js → board.js → rules.js → accounts.js → settings.js. It
+   reads window.MC (app.js) lazily, and a key value only ever travels one way: into main, never back. */
 'use strict';
 (() => {
   const $ = (s) => document.querySelector(s);
@@ -36,7 +37,9 @@
   ];
 
   const status = (m) => { const s = $('#acct-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 6000); };
-  const isOpen = () => { const d = $('#dlg-accounts'); return !!(d && d.open); };
+  /** Is the Accounts & AI section actually on screen? (Settings dialog open, that section selected.) */
+  const isOpen = () => { const d = $('#dlg-settings'); const sec = $('.set-sec[data-sec="accounts"]'); return !!(d && d.open && sec && !sec.hidden); };
+  const aiOpen = () => { const d = $('#dlg-ai'); return !!(d && d.open); };
 
   async function load(force) {
     if (!hasBackend()) { data = { providers: [], status: {}, secrets: {}, encryption: false, global: {} }; return data; }
@@ -60,7 +63,9 @@
   function statusLine(p, st) {
     const line = el('div', 'acct-status-line');
     line.appendChild(el('span', 'acct-dot ' + dotClass(p, st)));
-    line.appendChild(el('span', 'acct-detail', (st && st.detail) || 'not checked yet'));
+    const detail = el('span', 'acct-detail', (st && st.detail) || 'not checked yet');
+    detail.title = [(st && st.detail) || 'not checked yet', st && st.path].filter(Boolean).join('\n');
+    line.appendChild(detail);
     if (st && st.error) line.appendChild(el('span', 'acct-err', st.error));
     return line;
   }
@@ -78,7 +83,7 @@
     try { r = await (kind === 'login' ? api.login(p.id, proj.path) : api.install(p.id, proj.path)); }
     catch (e) { r = { error: String((e && e.message) || e) }; }
     if (!r || r.error) { status(r && r.error ? r.error : 'could not open a terminal'); return; }
-    const dlg = $('#dlg-accounts'); if (dlg && dlg.open) dlg.close();
+    for (const id of ['#dlg-settings', '#dlg-ai']) { const dlg = $(id); if (dlg && dlg.open) dlg.close(); }
     try { await window.MC.adoptTerminal(proj, r.ptyId, (kind === 'login' ? 'Log in: ' : 'Install: ') + p.name); }
     catch (e) { status('the terminal did not open: ' + ((e && e.message) || e)); }
   }
@@ -170,12 +175,15 @@
 
   async function reload(force) { if (force) status('running the status probes…'); await load(force); render(); if (force) status('status refreshed'); }
 
-  // ───────── the per-project checklist inside the Repo & account dialog
+  // ───────── the per-project checklist: the AI button in the project header
   async function projectChecklist(box, projectPath) {
     if (!box) return;
     box.innerHTML = '';
     if (!hasBackend()) return;
     if (!data) await load(false);
+    // two callers can be inside that await at once (opening the dialog, and a push from main): clear again
+    // here, where nothing else can come between the clear and the rows, or the list draws twice.
+    box.innerHTML = '';
     const proj = (window.MC && window.MC.currentProject()) || null;
     const own = (proj && proj.settings && proj.settings.providers) || {};
     const glob = (data && data.global) || {};
@@ -193,16 +201,24 @@
   }
 
   // ───────── wiring
-  const btn = $('#btn-accounts');
-  if (btn) btn.onclick = () => open();
-  const closeBtn = $('#acct-close'); if (closeBtn) closeBtn.onclick = () => $('#dlg-accounts').close();
   const refreshBtn = $('#acct-refresh'); if (refreshBtn) refreshBtn.onclick = () => reload(true);
 
-  async function open() {
-    const dlg = $('#dlg-accounts'); if (!dlg) return;
-    render();                       // whatever we already know, immediately
-    if (!dlg.open) dlg.showModal();
-    await load(false); render();    // then the live payload
+  /** settings.js calls this when the Accounts & AI section is shown: draw what we know, then refresh it. */
+  async function mount() { render(); await load(false); render(); }
+  /** Kept for callers that just want the accounts: open the Settings dialog on this section. */
+  function open() { if (window.Settings) window.Settings.open('accounts'); else mount(); }
+
+  // the per-project AI dialog
+  const aiDlg = $('#dlg-ai');
+  const aiBtn = $('#btn-ai');
+  if (aiBtn) aiBtn.onclick = () => openAi();
+  const aiClose = $('#ai-close'); if (aiClose) aiClose.onclick = () => aiDlg.close();
+  async function openAi() {
+    const p = window.MC && window.MC.currentProject();
+    if (!aiDlg || !p || !p.path) return;
+    const label = $('#dlg-ai-project'); if (label) label.textContent = `${p.name} — ${p.path}`;
+    if (!aiDlg.open) aiDlg.showModal();
+    await projectChecklist($('#ai-providers'), p.path);
   }
 
   if (window.mc && typeof window.mc.onProviders === 'function') {
@@ -210,8 +226,9 @@
       if (!payload) return;
       data = { ...(data || {}), ...payload };
       if (isOpen()) render();
+      if (aiOpen()) { const p = window.MC && window.MC.currentProject(); if (p && p.path) projectChecklist($('#ai-providers'), p.path); }
     });
   }
 
-  window.Accounts = { open, api, projectChecklist, reload, state: () => data, hasBackend };
+  window.Accounts = { open, openAi, mount, api, projectChecklist, reload, state: () => data, hasBackend };
 })();
