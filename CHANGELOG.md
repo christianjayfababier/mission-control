@@ -15,12 +15,28 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 - **Global rules** keeps track of unsaved edits: while the textarea differs from the file on disk the section
   is marked **unsaved** and **Save** lights up, and leaving it — another section, **Done**, Esc or **Reload
   from disk** — asks inline first (**Save / Discard / Keep editing**) instead of dropping the text (T-029).
+- **First-run Setup wizard**: on a machine with no projects and no completed setup, Mission Control opens a
+  four-step wizard by itself — what the app is, the four tools it needs (**Node.js**, **Git**, the **GitHub
+  CLI** and **Claude Code**, with Install and Log in buttons that open a real terminal and run the command),
+  the optional AI tools and API keys, and the first project. **Next** on the tools step stays disabled until
+  all four are ready and says in one sentence what is still blocking. Node.js and Git joined the provider
+  registry as required tools, so **Settings → Accounts & AI** now checks them too. **Settings → About &
+  diagnostics → Run setup again** reopens the wizard; finishing it is recorded in `settings.json` and it never
+  opens by itself again (T-020).
+- **`--data-dir <path>`**: a start-up flag that moves everything Mission Control owns — registry, settings,
+  boards, notes, PR watch, the orchestrator kit and a Chromium profile of its own — somewhere else for that
+  run, so a fresh install can be tried on a machine that already has one. Without the flag nothing changes
+  (T-020, README → Troubleshooting).
+- **[docs/FIRST-RUN.md](docs/FIRST-RUN.md)**: a guide a second owner follows from the download to their first
+  Recall — installing past SmartScreen, the wizard, signing in to Claude Code and the GitHub CLI, adding a
+  project, **Start a new day**, what the lead does at Recall, where the board, inbox, rules, Team chat and
+  Settings live, how updates arrive, and where the crash log is (T-023).
 
 ### Fixed
 
 - The smoke test no longer guesses when the app is ready: with `--view` the screenshot is taken when the
   renderer reports the view is on screen (plus a 300 ms settle) instead of when `--wait` runs out, which stays
-  the upper bound. It also fails a blank capture (the PNG must be over 50 KB) and prints the `VIEW READY`
+  the upper bound. It also fails a blank capture (the PNG must be over 20 KB) and prints the `VIEW READY`
   timing line, and `SMOKE_VIEW=<view>` runs the same check against a view (T-029).
 
 ## 0.2.2 - 2026-09-13
