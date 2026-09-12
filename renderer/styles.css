@@ -467,17 +467,25 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 
 /* "Providers this project may use", inside the Repo & account dialog */
 /* AI Collaboration (the per-project dialog): the same groups as Settings, one row and one switch each */
-#dlg-ai[open] { display: flex; flex-direction: column; gap: 9px; }
+#dlg-ai[open] { display: flex; flex-direction: column; gap: 9px; max-height: 88vh; }
 #dlg-ai h3 { margin: 0; }
 #dlg-ai .acct-group-head { margin-top: 2px; }
-.ai-groups { display: flex; flex-direction: column; gap: 14px; max-height: 58vh; overflow-y: auto; }
+/* only the list scrolls: the title, the intro and the footer stay put however many providers there are */
+.ai-groups { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.ai-item { display: flex; flex-direction: column; }
 .ai-row { display: flex; align-items: center; gap: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .ai-row.off { background: transparent; border-style: dashed; }
 .ai-row.off .ai-name, .ai-row.off .ai-blurb { color: var(--muted); }
 .ai-who { flex: 1; min-width: 0; }
-.ai-name { font-size: 12px; font-weight: 700; display: flex; align-items: baseline; gap: 8px; }
+.ai-name { font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
 .ai-blurb { color: var(--muted); font-size: 11px; line-height: 1.45; margin-top: 2px; }
 .dlg-actions #ai-status { margin-right: auto; }
+
+/* switched on, but the tool still needs installing, a login or a key */
+.ai-callout { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -1px 0 0 14px; padding: 7px 10px 7px 11px; border-left: 3px solid var(--amber); border-radius: 0 7px 7px 0; background: rgba(210, 153, 34, .08); }
+.ai-callout-text { font-size: 11px; color: var(--amber); flex: 1; min-width: 140px; }
+/* the row "Open Settings" lands on, marked just long enough to find it */
+.acct-row.flash { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(210, 153, 34, .25); }
 
 /* the switch: a real checkbox for the keyboard and the screen reader, a CSS track for the eye */
 .sw { position: relative; display: inline-flex; flex: 0 0 auto; cursor: pointer; }

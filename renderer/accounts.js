@@ -90,7 +90,7 @@
 
   // ───────── rows
   function cliRow(p, st) {
-    const row = el('div', 'acct-row');
+    const row = el('div', 'acct-row'); row.dataset.provider = p.id;
     const who = el('div', 'acct-who');
     const nameLine = el('div', 'acct-name', p.name);
     if (st && st.version) nameLine.appendChild(el('span', 'acct-ver', 'v' + st.version));
@@ -117,7 +117,7 @@
   }
 
   function keyRow(p, st) {
-    const row = el('div', 'acct-row key');
+    const row = el('div', 'acct-row key'); row.dataset.provider = p.id;
     const who = el('div', 'acct-who');
     const nameLine = el('div', 'acct-name', p.name);
     nameLine.appendChild(el('span', 'acct-var', p.envVar || ''));
@@ -187,6 +187,21 @@
     'gemini-key': 'Lets the Gemini CLI run without the browser login.',
   };
   const AI_HINT = { required: 'Mission Control’s own tools.', ai: 'Extra agents a worker may call.', keys: 'These are what actually get withheld.' };
+  /** The renderer's copy of providers.readiness() (main process code cannot be required here).
+      Only a definite false is a problem: an unknown state, like Gemini's loggedIn, never nags. */
+  function readiness(p, st, hasKey) {
+    if (!p) return { ready: true, reason: null, actions: [] };
+    if (p.kind === 'key') return hasKey ? { ready: true, reason: null, actions: [] } : { ready: false, reason: 'no-key', actions: ['settings'] };
+    const s = st || {};
+    if (s.installed === false) return { ready: false, reason: 'not-installed', actions: p.install ? ['install'] : [] };
+    if (s.loggedIn === false) return { ready: false, reason: 'not-logged-in', actions: p.login ? ['login'] : [] };
+    return { ready: true, reason: null, actions: [] };
+  }
+  const REASON = {
+    'not-installed': (p) => `${p.name} is not installed yet`,
+    'not-logged-in': (p) => `${p.name} is not logged in`,
+    'no-key': (p) => `No ${p.name.replace(/ API key$/, '')} API key is stored`,
+  };
 
   /** A styled checkbox: a real input (so the keyboard and the screen reader get it) behind a CSS track. */
   function switchEl(on, label, onChange) {
@@ -199,6 +214,20 @@
     input.onchange = () => { input.setAttribute('aria-checked', input.checked ? 'true' : 'false'); onChange(input.checked); };
     wrap.appendChild(input); wrap.appendChild(track);
     return wrap;
+  }
+
+  /** Open Settings → Accounts & AI with one provider's row scrolled into view and briefly marked. */
+  function openSettingsAt(id) {
+    const d = $('#dlg-ai'); if (d && d.open) d.close();
+    if (!window.Settings) return;
+    window.Settings.open('accounts');
+    setTimeout(() => {
+      const row = document.querySelector(`.acct-row[data-provider="${id}"]`);
+      if (!row) return;
+      try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { row.scrollIntoView(); }
+      row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 2000);
+      const field = row.querySelector('.acct-key'); if (field && !field.disabled) field.focus();
+    }, 250);   // the section draws what it knows, then the live payload; land after both
   }
 
   const aiStatus = (m) => { const s = $('#ai-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 4000); };
@@ -227,9 +256,13 @@
       h.appendChild(el('span', 'muted small', AI_HINT[g.id] || ''));
       sec.appendChild(h);
       for (const p of members) {
+        const wrap = el('div', 'ai-item');
         const row = el('div', 'ai-row');
+        const rd = readiness(p, (data && data.status && data.status[p.id]) || null, !!(data && data.secrets && data.secrets[p.id]));
         const who = el('div', 'ai-who');
-        const name = el('div', 'ai-name', p.name);
+        const name = el('div', 'ai-name');
+        name.appendChild(el('span', 'acct-dot ' + (rd.ready ? 'ok' : 'warn')));
+        name.appendChild(el('span', null, p.name));
         if (p.envVar) name.appendChild(el('span', 'acct-var', p.envVar));
         who.appendChild(name);
         // the honest footnote: a CLI toggle records a preference, a key toggle actually withholds something
@@ -238,8 +271,21 @@
           : ' · records the preference; keys are what get withheld';
         who.appendChild(el('div', 'ai-blurb', (AI_LINE[p.id] || p.blurb || '') + tail));
         row.appendChild(who);
+        // switched on but not usable yet: say so under the row, with the one or two buttons that fix it
+        const callout = el('div', 'ai-callout');
+        const drawCallout = (on) => {
+          callout.innerHTML = '';
+          callout.hidden = !(on && !rd.ready);
+          if (callout.hidden) return;
+          callout.appendChild(el('span', 'ai-callout-text', (REASON[rd.reason] || (() => 'not ready'))(p)));
+          for (const a of rd.actions) {
+            if (a === 'install') { const b = el('button', 'btn small', 'Install'); b.title = p.install || ''; b.onclick = () => runInTerminal('install', p); callout.appendChild(b); }
+            else if (a === 'login') { const b = el('button', 'btn small', 'Log in'); b.title = p.login || ''; b.onclick = () => runInTerminal('login', p); callout.appendChild(b); }
+            else if (a === 'settings') { const b = el('button', 'btn small', 'Open Settings'); b.title = 'Settings → Accounts & AI'; b.onclick = () => openSettingsAt(p.id); callout.appendChild(b); }
+          }
+        };
         const sw = switchEl(live.get(p.id), p.name, async (on) => {
-          live.set(p.id, on); row.classList.toggle('off', !on);
+          live.set(p.id, on); row.classList.toggle('off', !on); drawCallout(on);
           const r = await api.setEnabled(projectPath, p.id, on);
           if (r && r.error) { aiStatus(r.error); return; }
           if (proj && proj.settings) proj.settings.providers = { ...(proj.settings.providers || {}), [p.id]: on };   // until the next snapshot
@@ -248,7 +294,10 @@
         });
         row.classList.toggle('off', !live.get(p.id));
         row.appendChild(sw);
-        sec.appendChild(row);
+        wrap.appendChild(row);
+        drawCallout(live.get(p.id));      // already on and not ready when the dialog opens: show it at once
+        wrap.appendChild(callout);
+        sec.appendChild(wrap);
       }
       box.appendChild(sec);
     }
