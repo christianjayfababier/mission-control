@@ -525,3 +525,17 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .set-row-name { font-size: 12px; font-weight: 700; }
 .set-row-path { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-empty { padding: 14px 2px; line-height: 1.6; }
+
+/* Add/create a project (renderer/newproject.js). The dialog is built in JS and appended to <body>,
+   so its layout lives here rather than next to the markup of dlg-repo. */
+.np-dlg[open] { display: flex; flex-direction: column; gap: 10px; }
+.np-modes { align-self: flex-start; }
+.np-pane { display: flex; flex-direction: column; gap: 10px; }
+.np-pane[hidden] { display: none; }
+.np-row { display: flex; gap: 8px; align-items: center; }
+.np-row input { flex: 1; min-width: 0; }
+.np-checks { display: flex; gap: 18px; flex-wrap: wrap; }
+.np-dlg .chk { flex-direction: row; align-items: center; color: var(--ink); }
+.np-preview { margin: 0; min-height: 14px; }
+.np-error { color: #f0776c; margin: 0; }
+.np-log { margin: 0; max-height: 150px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: pre-wrap; }
