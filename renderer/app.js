@@ -178,7 +178,7 @@ async function newTerminal(p, { activate = true } = {}) {
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
   const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
-  term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
+  term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else ptySend(ptyId, () => window.mc.ptyWrite(ptyId, d)); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
   if (activate) activateTab(ptyId); else renderTabs();
   return rec;
@@ -314,8 +314,22 @@ function sliceForPty(text, max = PTY_SLICE) {
   }
   return out;
 }
-/** Write text into a pty in slices the TUI keeps. Short text stays one write, so typing latency is unchanged. */
-function writeText(ptyId, text, { enter = false } = {}) {
+// A slow send holds the pty for as long as it drains, so every write to that pty queues behind it: otherwise a keystroke,
+// a second Send or an inbox answer would land in the middle of someone else's message. ptyId → tail promise while busy.
+const ptyQueue = new Map();
+/** Run fn once the pty is free, and keep it busy until fn's promise settles. Idle pty: fn runs now, in this same tick. */
+function ptySend(ptyId, fn) {
+  const prev = ptyQueue.get(ptyId);
+  let tail;
+  if (prev) tail = prev.then(fn);
+  else { try { tail = Promise.resolve(fn()); } catch { tail = Promise.resolve(); } }
+  tail = tail.catch(() => { /* a failed write must not block the next one */ });
+  ptyQueue.set(ptyId, tail);
+  tail.then(() => { if (ptyQueue.get(ptyId) === tail) ptyQueue.delete(ptyId); }); // nothing queued behind us: forget the pty
+  return tail;
+}
+/** Write text into a pty in slices the TUI keeps. Callers must hold the pty (be inside ptySend). */
+function drainText(ptyId, text, { enter = false } = {}) {
   const parts = sliceForPty(text);
   const tail = () => (enter ? new Promise((res) => setTimeout(() => { window.mc.ptyWrite(ptyId, '\r'); res(); }, PTY_ENTER_DELAY)) : Promise.resolve());
   if (parts.length <= 1) { if (text) window.mc.ptyWrite(ptyId, text); return tail(); }
@@ -328,13 +342,18 @@ function writeText(ptyId, text, { enter = false } = {}) {
     step();
   });
 }
+const writeText = (ptyId, text, opts) => ptySend(ptyId, () => drainText(ptyId, text, opts));
 function sendToSession(sid, text) {
   const t = hostOf(sid); if (!t) return false;
   const body = text.replace(/\r\n?/g, '\n');
-  if (body.includes('\n')) { // bracketed paste keeps newlines from submitting early; its markers go out as their own writes
-    window.mc.ptyWrite(t.ptyId, '\x1b[200~');
-    writeText(t.ptyId, body).then(() => { window.mc.ptyWrite(t.ptyId, '\x1b[201~'); setTimeout(() => window.mc.ptyWrite(t.ptyId, '\r'), PTY_ENTER_DELAY); });
-  } else writeText(t.ptyId, body, { enter: true });
+  ptySend(t.ptyId, () => { // marker, body, marker and Enter are one job: nothing may be written between them
+    if (!body.includes('\n')) return drainText(t.ptyId, body, { enter: true });
+    window.mc.ptyWrite(t.ptyId, '\x1b[200~'); // bracketed paste keeps newlines from submitting early
+    return drainText(t.ptyId, body).then(() => new Promise((res) => {
+      window.mc.ptyWrite(t.ptyId, '\x1b[201~');
+      setTimeout(() => { window.mc.ptyWrite(t.ptyId, '\r'); res(); }, PTY_ENTER_DELAY);
+    }));
+  });
   return true;
 }
 function refreshSessionFooters(p) {
