@@ -119,3 +119,11 @@ Deviations from the sections above, accepted at review; T-020 codes against this
 - **Readiness:** `readiness(provider, status, hasKey)` → `{ ready, reason, actions }`; not-installed wins over not-logged-in; a project toggle turned on for a provider that is not ready shows an amber callout with Install / Log in / Open Settings.
 - **Filter:** the Settings list filters on name, id, bin, env var, blurb and `keys`.
 - **Screenshot timing:** `--view` retries every 500 ms for up to 6 s until a project is selected; the 19-row AI dialog needs `--wait 12000` on a loaded machine.
+
+## Status delivery (2026-09-12, after the lead's review)
+
+- `providers:list` answers at once from the cache: registry, secrets info, and a `status` map where an unprobed provider is `{ checking: true }`. The probe round runs behind it (concurrency 4, `which()` results cached until a forced refresh or `invalidate()`).
+- Each probe result is pushed as it lands: `providers` event `{ status: { <id>: Status }, partial: true }`. A full payload without `partial` still follows `secrets:set`, `secrets:remove` and a forced refresh.
+- Renderer: rows draw immediately with a grey "checking…" dot; `readiness()` treats `checking` as unknown (no callout). Settings rows update in place; the AI Collaboration list redraws on a push.
+- `view:ready` IPC: in screenshot mode the renderer reports when a `--view` dialog is open and painted; main prints one `VIEW READY <name> · env→snapshot … · env→painted …` line for the smoke run. Measured on this machine with 37 worker panes: snapshot 41-64 ms, project selected 152-329 ms, dialog open ~170-365 ms, first render 35-54 ms (renderWorkers 2-3 ms).
+- Known harness gap: `capturePage()` can return a frame that is stale for a recently updated row under low memory; a screenshot may lag the DOM. Follow-up on the board.
