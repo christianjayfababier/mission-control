@@ -31,10 +31,14 @@ const TICK_MS = 30 * 1000;
 const RUN_TIMEOUT_MS = 60 * 1000;
 const KINDS = ['chat', 'suggestion', 'joke', 'system'];
 
+// Claude in the chat spends the owner's Claude plan, which is the one budget the chat cannot make free.
+// The contract's principle 4 gives it "the smallest model and the lowest cap", so it gets its own, lower
+// hourly cap; every other agent uses capPerAgentPerHour. One entry per provider that needs an exception.
+const CAP_PER_AGENT = { claude: 4 };
 /** The per-project settings block, as it is stored under `chat` in project-settings.json. */
 const DEFAULTS = () => ({
   enabled: false, visible: false, roster: [], muted: [],
-  capPerAgentPerHour: 6, capPerProjectPerDay: 80,
+  capPerAgentPerHour: 6, capPerAgent: { ...CAP_PER_AGENT }, capPerProjectPerDay: 80,
   model: { claude: 'haiku', ollama: null },
 });
 /** Fold a stored (or half-written, or renderer-sent) block onto the defaults. Never throws. */
@@ -46,6 +50,12 @@ function normalizeSettings(raw) {
     enabled: !!s.enabled, visible: !!s.visible,
     roster: ids(s.roster), muted: ids(s.muted),
     capPerAgentPerHour: num(s.capPerAgentPerHour, d.capPerAgentPerHour, 1, 60),
+    capPerAgent: (() => {
+      const src = s.capPerAgent && typeof s.capPerAgent === 'object' ? s.capPerAgent : d.capPerAgent;
+      const out = {};
+      for (const [id, v] of Object.entries(src)) if (providers.byId(id)) out[id] = num(v, d.capPerAgent[id] || d.capPerAgentPerHour, 1, 60);
+      return out;
+    })(),
     capPerProjectPerDay: num(s.capPerProjectPerDay, d.capPerProjectPerDay, 1, 1000),
     model: {
       claude: String((s.model && s.model.claude) || d.model.claude).slice(0, 40),
@@ -221,21 +231,28 @@ function nextAgent(state = {}) {
   const muted = new Set(Array.isArray(state.muted) ? state.muted : []);
   const ready = state.ready || {};
   const per = state.perAgent || {};
-  const capHour = Number(state.capPerAgentPerHour) || 0;
+  const cap = capFor(state.capPerAgentPerHour, state.capPerAgent);
   const start = Math.max(0, roster.indexOf(state.last) + 1);   // -1 (nobody yet) → 0
   for (let n = 0; n < roster.length; n++) {
     const id = roster[(start + n) % roster.length];
     if (muted.has(id)) continue;
     if (ready[id] === false) continue;                          // unknown readiness is not a refusal
-    if (capHour && Number(per[id] || 0) >= capHour) continue;
+    const c = cap(id);
+    if (c && Number(per[id] || 0) >= c) continue;
     return id;
   }
   return null;
 }
-/** Agents that are over their hourly cap right now — the panel draws them as "resting". */
-function restingAgents(perAgent = {}, capPerAgentPerHour = 0) {
-  const cap = Number(capPerAgentPerHour) || 0;
-  return cap ? Object.keys(perAgent).filter((id) => Number(perAgent[id] || 0) >= cap) : [];
+/** This agent's hourly cap: its own override (Claude's 4) if it has one, else the general one. */
+function capFor(capPerAgentPerHour, capPerAgent) {
+  const general = Number(capPerAgentPerHour) || 0;
+  const over = capPerAgent && typeof capPerAgent === 'object' ? capPerAgent : {};
+  return (id) => (Number(over[id]) > 0 ? Number(over[id]) : general);
+}
+/** Agents that are over their own hourly cap right now — the panel draws them as "resting". */
+function restingAgents(perAgent = {}, capPerAgentPerHour = 0, capPerAgent = null) {
+  const cap = capFor(capPerAgentPerHour, capPerAgent);
+  return Object.keys(perAgent).filter((id) => { const c = cap(id); return c && Number(perAgent[id] || 0) >= c; });
 }
 
 // ── when a round may run (pure) ──────────────────────────────────────────────────────────────────
@@ -448,6 +465,7 @@ function fixture(file) {
  *   boardOf(p)                              — { tickets, todos } for the briefing
  *   memDirOf(p)                             — the project's memory dir, for the journal tail
  *   readyOf(id)                             — true | false | null (unknown), from the provider probes
+ *   isEnabled(p, id)                        — is this provider switched on for the project in AI Collaboration
  *   envOf(p)                                — the assembled environment for this project
  *   send(payload)                           — push the `chat` event to the renderer
  *   hasWindow()                             — is there a window to push to
@@ -486,15 +504,27 @@ class ChatService {
     r.pendingEvent = one(text, 220);
   }
   // ── roster
+  /**
+   * May this agent speak, and if not, why? AI Collaboration comes first: that dialog is where the owner
+   * decides which AIs may touch a project at all, so a provider switched off there never talks in the
+   * chat either — an agent already in the roster stays listed, says why it is silent, and is skipped by
+   * nextAgent. A readiness the probes cannot determine is not a refusal.
+   */
+  agentReady(p, id) {
+    if (this.o.isEnabled && !this.o.isEnabled(p, id)) return { ready: false, reason: 'disabled in AI Collaboration' };
+    const r = this.o.readyOf ? this.o.readyOf(id) : null;
+    if (r === false) return { ready: false, reason: 'not installed, or not logged in' };
+    return { ready: true, reason: null };
+  }
   /** RosterRow[] for the panel. `avatar` is drawn by the renderer from `seed` (renderer/persona.js). */
   roster(p, counts = null) {
     const s = this.get(p);
     const c = counts || this.store.counts(p);
-    const resting = new Set(restingAgents(c.agent, s.capPerAgentPerHour));
+    const resting = new Set(restingAgents(c.agent, s.capPerAgentPerHour, s.capPerAgent));
     return s.roster.map((id) => {
       const who = persona(id);
-      const ready = this.o.readyOf ? this.o.readyOf(id) : null;
-      return { id, name: who.name, seed: who.seed, specialty: who.specialty, ready: ready !== false, muted: s.muted.includes(id), resting: resting.has(id), count: c.agent[id] || 0 };
+      const st = this.agentReady(p, id);
+      return { id, name: who.name, seed: who.seed, specialty: who.specialty, ready: st.ready, reason: st.reason, muted: s.muted.includes(id), resting: resting.has(id), count: c.agent[id] || 0 };
     });
   }
   /** Everything the panel draws in one call. `fixtureFile` swaps the store out for a jsonl on disk. */
@@ -512,17 +542,22 @@ class ChatService {
     const caps = this.store.counts(p);
     return { settings, roster: this.roster(p, caps), messages: this.store.read(p), caps, fixture: false };
   }
-  /** Providers that could join: an exec template, installed, and not already in the roster. */
+  /**
+   * Providers that could join: a non-interactive command, not already in the roster, and **enabled for
+   * this project in AI Collaboration** — a provider the owner switched off there is not offered at all.
+   */
   candidates(p) {
     const s = this.get(p);
     return providers.list()
       .filter((x) => x.kind === 'cli' && (CHAT_EXEC[x.id] || x.exec) && !s.roster.includes(x.id))
-      .map((x) => ({ id: x.id, label: x.name, name: personaName(x.id), ready: this.o.readyOf ? this.o.readyOf(x.id) !== false : true }));
+      .filter((x) => !this.o.isEnabled || this.o.isEnabled(p, x.id))
+      .map((x) => ({ id: x.id, label: x.name, name: personaName(x.id), ready: this.agentReady(p, x.id).ready }));
   }
   /** Adding an agent posts "X joined the chat" and lets the next round greet them (contract). */
   addAgent(p, id) {
     const s = this.get(p);
     if (!providers.byId(id) || s.roster.includes(id)) return s;
+    if (this.o.isEnabled && !this.o.isEnabled(p, id)) return s;   // AI Collaboration decides who may touch the project
     const next = this.set(p, { roster: [...s.roster, id] });
     const who = persona(id);
     const m = this.store.append(p, { agent: id, name: who.name, kind: 'system', text: `${who.name} (${who.specialty}) joined the chat.` });
@@ -572,8 +607,8 @@ class ChatService {
     const counts = this.store.counts(p);
     const r = this.round(p);
     const ready = {};
-    for (const id of s.roster) ready[id] = this.o.readyOf ? this.o.readyOf(id) !== false : true;
-    const id = nextAgent({ roster: s.roster, muted: s.muted, ready, perAgent: counts.agent, today: counts.today, capPerAgentPerHour: s.capPerAgentPerHour, capPerProjectPerDay: s.capPerProjectPerDay, last: r.last });
+    for (const id of s.roster) ready[id] = this.agentReady(p, id).ready;
+    const id = nextAgent({ roster: s.roster, muted: s.muted, ready, perAgent: counts.agent, today: counts.today, capPerAgentPerHour: s.capPerAgentPerHour, capPerAgent: s.capPerAgent, capPerProjectPerDay: s.capPerProjectPerDay, last: r.last });
     if (!id) { if (this.force) this.log(`CHAT SKIP ${safeKey(p)} · nobody may speak (muted, resting or not ready)`); return null; }
     const plan = execPlan(id, { settings: s });
     if (plan.error) { this.log(`chat · ${id}: ${plan.error}`); r.last = id; return null; }
@@ -605,8 +640,8 @@ class ChatService {
 
 module.exports = {
   ChatService, ChatStore,
-  buildBriefing, parseReply, nextAgent, shouldRound, restingAgents, jitter,
-  normalizeSettings, DEFAULTS, persona, personaName, redact, looksSecret,
+  buildBriefing, parseReply, nextAgent, shouldRound, restingAgents, capFor, jitter,
+  normalizeSettings, DEFAULTS, CAP_PER_AGENT, persona, personaName, redact, looksSecret,
   execPlan, tokenize, runTool, chatEnv, CHAT_EXEC, STDIN_TOOLS,
   readGoal, readJournalTail, parseOllamaList, fixture, firstJson,
   safeKey, KEEP_DAYS, MAX_TEXT, BRIEF_BUDGET, ROUND_MIN, ROUND_MAX, EVENT_COALESCE_MS, TICK_MS,

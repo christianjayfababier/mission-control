@@ -139,10 +139,15 @@
       const chip = el('div', 'ch-chip' + (r.muted ? ' muted-agent' : '') + (r.ready ? '' : ' notready'));
       const av = el('img', 'ch-chip-av'); av.src = avatarFor(r); av.alt = r.name; chip.appendChild(av);
       chip.appendChild(el('span', 'ch-chip-name', r.name));
-      if (r.muted) chip.appendChild(el('span', 'ch-chip-tag', 'muted'));
+      // a tool the owner switched off in AI Collaboration stays in the roster and says so, and never speaks
+      const off = !r.ready && /AI Collaboration/i.test(r.reason || '');
+      if (off) chip.appendChild(el('span', 'ch-chip-tag', 'disabled'));
+      else if (r.muted) chip.appendChild(el('span', 'ch-chip-tag', 'muted'));
       else if (r.resting) chip.appendChild(el('span', 'ch-chip-tag', 'resting'));
       else if (!r.ready) chip.appendChild(el('span', 'ch-chip-tag', 'not ready'));
-      chip.title = `${r.name} — ${r.specialty}\n${r.count} message${r.count === 1 ? '' : 's'} this hour${r.ready ? '' : '\nThis tool is not installed or not logged in, so it stays quiet.'}\nClick for mute and remove.`;
+      chip.title = `${r.name} — ${r.specialty}\n${r.count} message${r.count === 1 ? '' : 's'} this hour`
+        + (r.ready ? '' : `\nSilent: ${r.reason}.${off ? ' Switch it back on in AI Collaboration to let it talk again.' : ''}`)
+        + '\nClick for mute and remove.';
       chip.onclick = (ev) => {
         ev.stopPropagation();
         const b = chip.getBoundingClientRect();
@@ -161,7 +166,7 @@
       let c = { agents: [], ollama: [] };
       try { c = (await window.mc.chatCandidates(C.project.path)) || c; } catch { /* offer nothing */ }
       const items = c.agents.map((a) => [`${a.name} · ${a.label}${a.ready ? '' : ' (not installed)'}`, () => addAgent(a, c.ollama)]);
-      openMenu(b.left, b.bottom + 4, items.length ? items : [['everyone who can join is already here', () => { }]]);
+      openMenu(b.left, b.bottom + 4, items.length ? items : [['nobody left to add — switch more tools on in AI Collaboration', () => { }]]);
     };
     box.appendChild(add);
   }
@@ -227,7 +232,11 @@
     const cap = C.settings ? C.settings.capPerProjectPerDay : 0;
     const today = (C.caps && C.caps.today) || 0;
     c.textContent = C.settings ? `${today} of ${cap} messages today · ${C.roster.length} in the chat` : '';
-    c.title = 'Hard caps keep the chat cheap: at most ' + (C.settings ? C.settings.capPerAgentPerHour : '?') + ' messages per colleague per hour and ' + cap + ' per project per day.';
+    const perAgent = C.settings ? C.settings.capPerAgentPerHour : '?';
+    const claudeCap = C.settings && C.settings.capPerAgent ? C.settings.capPerAgent.claude : null;
+    c.title = `Hard caps keep the chat cheap: at most ${perAgent} messages per colleague per hour`
+      + (claudeCap && claudeCap !== perAgent ? ` (${claudeCap} for Claude, which spends your Claude plan)` : '')
+      + ` and ${cap} per project per day.`;
     const btn = $('#ch-clear');
     if (btn) { btn.textContent = C.clearArmed ? 'Really clear?' : 'Clear history'; btn.classList.toggle('danger', C.clearArmed); }
     const note = $('#ch-note');

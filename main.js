@@ -145,6 +145,9 @@ const chat = new ChatService({
   boardOf: (p) => boards.load(p),
   memDirOf: (p) => path.join(PROJ_DIR_ROOT, checkpoints.slugFor(p), 'memory'),
   readyOf: (id) => { try { return providers.readiness(providers.byId(id), providers.cachedStatus(secrets.info())[id], false).ready; } catch { return null; } },
+  // AI Collaboration is where the owner decides which AIs may touch a project; the chat obeys it too, so
+  // a provider switched off there is never offered and, if it is already in the roster, never speaks.
+  isEnabled: (p, id) => { try { return providers.isEnabled(id, settings.get(p), globalSettings()); } catch { return true; } },
   envOf: (p) => providers.assembleEnv({ base: process.env, secrets: secrets.map(), projectSettings: settings.get(p), globalSettings: globalSettings() }),
   send: (payload) => { if (win && !win.isDestroyed()) win.webContents.send('chat', payload); },
   hasWindow: () => !!(win && !win.isDestroyed()),

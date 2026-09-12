@@ -1114,7 +1114,7 @@ check('parseOllamaList reads the model names out of `ollama list`', () => {
   assert.deepEqual(chat.parseOllamaList(''), []);
 });
 check('normalizeSettings: the contract defaults, and nonsense from disk cannot break the scheduler', () => {
-  assert.deepEqual(chat.normalizeSettings(null), { enabled: false, visible: false, roster: [], muted: [], capPerAgentPerHour: 6, capPerProjectPerDay: 80, model: { claude: 'haiku', ollama: null } });
+  assert.deepEqual(chat.normalizeSettings(null), { enabled: false, visible: false, roster: [], muted: [], capPerAgentPerHour: 6, capPerAgent: { claude: 4 }, capPerProjectPerDay: 80, model: { claude: 'haiku', ollama: null } });
   const s = chat.normalizeSettings({ enabled: 1, roster: ['claude', 'claude', 'not-a-tool'], capPerAgentPerHour: 'x', capPerProjectPerDay: 99999 });
   assert.deepEqual(s.roster, ['claude']);
   assert.equal(s.enabled, true);
@@ -1149,6 +1149,60 @@ check('the persona a message is stored with is the one renderer/persona.js draws
   assert.equal(chat.persona('claude').seed, 'chat:claude');
   assert.match(chat.persona('gemini').specialty, /^Google Gemini CLI, /);
 });
+
+// AI Collaboration decides which AIs may touch a project (docs/ACCOUNTS-CONTRACT.md); the chat obeys it.
+// A stub service: every dependency of ChatService is a callback, so this needs no Electron and no disk.
+const stubChat = (over = {}) => {
+  const store = {};
+  return new chat.ChatService({
+    dir: path.join(tmp, 'chat-stub'),
+    getSettings: () => store.chat,
+    setSettings: (_p, next) => { store.chat = next; },
+    listProjects: () => [],
+    readyOf: () => true,
+    log: () => { },
+    ...over,
+  });
+};
+check('candidates: a provider disabled for the project in AI Collaboration is never offered under "+ add"', () => {
+  const off = new Set(['gemini']);
+  const svc = stubChat({ isEnabled: (_p, id) => !off.has(id) });
+  svc.set(CHAT_PROJ, { roster: [] });
+  const ids = svc.candidates(CHAT_PROJ).map((c) => c.id);
+  assert.ok(ids.includes('claude'), 'an enabled tool is offered');
+  assert.equal(ids.includes('gemini'), false, 'a disabled tool must not be offered');
+  // and it cannot be smuggled in behind the menu's back
+  svc.addAgent(CHAT_PROJ, 'gemini');
+  assert.deepEqual(svc.get(CHAT_PROJ).roster, []);
+});
+check('roster: an agent disabled in AI Collaboration after joining stays listed, says why, and never speaks', () => {
+  let off = false;
+  const svc = stubChat({ isEnabled: (_p, id) => !(off && id === 'gemini') });
+  svc.set(CHAT_PROJ, { roster: ['claude', 'gemini'] });
+  assert.deepEqual(svc.roster(CHAT_PROJ).map((r) => [r.id, r.ready]), [['claude', true], ['gemini', true]]);
+  off = true;
+  const rows = svc.roster(CHAT_PROJ);
+  assert.equal(rows.length, 2, 'it stays in the roster');
+  const gem = rows.find((r) => r.id === 'gemini');
+  assert.equal(gem.ready, false);
+  assert.match(gem.reason, /disabled in AI Collaboration/);
+  assert.equal(svc.agentReady(CHAT_PROJ, 'claude').ready, true);
+  // and the scheduler's own pick skips it: after Claude speaks, the turn comes back to Claude
+  const ready = {}; for (const id of ['claude', 'gemini']) ready[id] = svc.agentReady(CHAT_PROJ, id).ready;
+  assert.equal(chat.nextAgent({ roster: ['claude', 'gemini'], ready, last: 'claude', capPerAgentPerHour: 6, capPerProjectPerDay: 80 }), 'claude');
+});
+check('caps: Claude has its own lower hourly cap, because it spends the owner\'s Claude plan', () => {
+  const d = chat.normalizeSettings(null);
+  assert.equal(d.capPerAgentPerHour, 6);
+  assert.equal(d.capPerAgent.claude, 4);
+  const state = { roster: ['claude', 'gemini'], capPerAgentPerHour: 6, capPerAgent: d.capPerAgent, capPerProjectPerDay: 80 };
+  assert.equal(chat.nextAgent({ ...state, perAgent: { claude: 3 } }), 'claude');   // under its own cap
+  assert.equal(chat.nextAgent({ ...state, perAgent: { claude: 4 } }), 'gemini');   // at 4 Claude rests
+  assert.equal(chat.nextAgent({ ...state, perAgent: { gemini: 4 }, last: 'claude' }), 'gemini');  // 4 is not everyone's cap
+  assert.equal(chat.nextAgent({ ...state, perAgent: { gemini: 6 }, last: 'claude' }), 'claude');
+  assert.deepEqual(chat.restingAgents({ claude: 4, gemini: 4 }, 6, d.capPerAgent), ['claude']);
+});
+
 
 check('every module main.js and preload.js require must be in build.files, or the installed app dies on boot', () => {
   // PR #10 and #11 added providers.js, secrets.js, globalsettings.js and newproject-lib.js and never
