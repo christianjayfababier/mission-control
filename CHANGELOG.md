@@ -8,6 +8,8 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+## 0.2.1 - 2026-09-13
+
 ### Added
 
 - A main-process crash log at `~/.claude/mission-control/logs/main.log`: one line per event with the
