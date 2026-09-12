@@ -36,7 +36,17 @@
     { id: 'keys', title: 'API keys', hint: 'Stored encrypted on this machine (Windows DPAPI) and exported into every new terminal of a project that may use them.', match: (p) => p.kind === 'key' },
   ];
 
-  const status = (m) => { const s = $('#acct-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 6000); };
+  /* The Setup wizard (setup.js) reuses the row renderers below, so it also has to hear what they say and
+     when a probe lands. Two hooks, both no-ops until something registers: a status sink (the wizard has
+     its own status line, and #acct-status is inside the closed Settings dialog) and an update listener. */
+  let statusSink = null;
+  const watchers = new Set();
+  const notifyWatchers = (payload) => { for (const cb of [...watchers]) { try { cb(data, payload); } catch { /* a listener must not break the push */ } } };
+
+  const status = (m) => {
+    if (statusSink) { try { statusSink(m || ''); } catch { /* ignore */ } }
+    const s = $('#acct-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 6000);
+  };
   /** Is the Accounts & AI section actually on screen? (Settings dialog open, that section selected.) */
   const isOpen = () => { const d = $('#dlg-settings'); const sec = $('.set-sec[data-sec="accounts"]'); return !!(d && d.open && sec && !sec.hidden); };
   const aiOpen = () => { const d = $('#dlg-ai'); return !!(d && d.open); };
@@ -58,7 +68,9 @@
     if (p.kind === 'key') return st.installed ? 'ok' : 'off';
     if (!st.installed) return p.role === 'required' ? 'bad' : 'off';
     if (st.loggedIn === false) return 'warn';
-    if (st.loggedIn === null) return 'unknown';
+    // A tool with no login line has no login state to be unsure about: installed is as good as it gets,
+    // and readiness() already calls it ready. Only a tool that *can* be logged in shows the grey dot.
+    if (st.loggedIn === null) return p.login ? 'unknown' : 'ok';
     return 'ok';
   }
   function statusLine(p, st) {
@@ -79,12 +91,15 @@
   }
   async function runInTerminal(kind, p) {
     const proj = terminalProject();
-    if (!proj) { status('Add a project first — logins and installs run in a terminal of a project.'); return; }
+    // On a brand-new machine there is no project to open a terminal tab in, and the Setup wizard's Tools
+    // step is exactly that case: say the line the owner can run themselves rather than nothing useful.
+    if (!proj) { const line = kind === 'login' ? p.login : p.install; status(line ? `No project yet — open a terminal (or PowerShell) and run:  ${line}` : 'Add a project first — logins and installs run in a terminal of a project.'); return; }
     let r = null;
     try { r = await (kind === 'login' ? api.login(p.id, proj.path) : api.install(p.id, proj.path)); }
     catch (e) { r = { error: String((e && e.message) || e) }; }
     if (!r || r.error) { status(r && r.error ? r.error : 'could not open a terminal'); return; }
-    for (const id of ['#dlg-settings', '#dlg-ai']) { const dlg = $(id); if (dlg && dlg.open) dlg.close(); }
+    // the terminal is the point of pressing the button: get every dialog out of the way, the wizard too
+    for (const id of ['#dlg-settings', '#dlg-ai', '#dlg-setup']) { const dlg = $(id); if (dlg && dlg.open) dlg.close(); }
     try { await window.MC.adoptTerminal(proj, r.ptyId, (kind === 'login' ? 'Log in: ' : 'Install: ') + p.name); }
     catch (e) { status('the terminal did not open: ' + ((e && e.message) || e)); }
   }
@@ -390,8 +405,21 @@
       // a partial push touches a handful of rows; redraw those, not the whole list
       if (isOpen()) { if (partial) updateRows(Object.keys(payload.status || {})); else render(); }
       if (aiOpen()) { const p = window.MC && window.MC.currentProject(); if (p && p.path) projectChecklist($('#ai-groups'), p.path); }
+      notifyWatchers(payload);
     });
   }
 
-  window.Accounts = { open, openAi, mount, api, projectChecklist, reload, applyFilter, state: () => data, hasBackend };
+  window.Accounts = {
+    open, openAi, mount, api, projectChecklist, reload, applyFilter, state: () => data, hasBackend,
+    // ── what the Setup wizard borrows (T-020), so there is exactly one row renderer in the app
+    GROUPS,
+    /** Load the payload if we have not got one yet (or force a probe round) and hand it back. */
+    ensure: (force) => load(force),
+    /** One provider row, drawn exactly as Settings draws it: dot, version, blurb, Install / Log in. */
+    row: (p, st) => (p.kind === 'key' ? keyRow(p, st) : cliRow(p, st)),
+    /** Be told when a probe lands or a key is saved; returns an unsubscribe. */
+    onUpdate(cb) { watchers.add(cb); return () => watchers.delete(cb); },
+    /** Where "Add a project first" and "could not open a terminal" go while the wizard is up front. */
+    setStatusSink(fn) { statusSink = typeof fn === 'function' ? fn : null; },
+  };
 })();

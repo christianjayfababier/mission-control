@@ -583,6 +583,25 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .set-row-path { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-empty { padding: 14px 2px; line-height: 1.6; }
 
+/* First-run Setup wizard (T-020, renderer/setup.js). It borrows the Settings shell — .set-body, .set-nav,
+   .set-pane, .set-sec — and the Accounts row renderer, so there is almost nothing of its own here.
+   `display` comes from .dlg.wide[open]; nothing below may set display on the dialog itself. */
+#dlg-setup h3 { margin: 0; }
+#dlg-setup #setup-intro { margin: 0; }
+.setup-nav-btn { flex-direction: row; align-items: flex-start; gap: 9px; }
+.setup-nav-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.setup-step-no { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 16px; text-align: center; margin-top: 1px; }
+.set-nav-btn.active .setup-step-no { border-color: var(--accent); color: var(--accent); }
+.setup-prose p { font-size: 13px; line-height: 1.65; color: var(--ink); margin: 0 0 12px; max-width: 74ch; }
+.setup-prose strong { color: var(--accent); font-weight: 700; }
+/* the one sentence that says why Next is grey — amber while something blocks, green once nothing does */
+.setup-block { border-left: 3px solid var(--amber); border-radius: 0 7px 7px 0; background: rgba(210, 153, 34, .08); color: var(--amber); font-size: 12px; line-height: 1.5; padding: 8px 11px; }
+.setup-block.ok { border-left-color: var(--green); background: rgba(63, 185, 80, .08); color: var(--green); }
+.dlg-actions #setup-status { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Back on the first step, and Next while the Tools gate is closed: they have to look unavailable */
+#dlg-setup .dlg-actions .btn:disabled { opacity: .4; cursor: default; }
+#dlg-setup .set-sec > .acct-groups { overflow-y: auto; }
+
 /* Add/create a project (renderer/newproject.js). The dialog is built in JS and appended to <body>,
    so its layout lives here rather than next to the markup of dlg-repo. */
 .np-dlg[open] { display: flex; flex-direction: column; gap: 10px; }
