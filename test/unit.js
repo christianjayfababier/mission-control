@@ -831,17 +831,24 @@ check('diag: the log rotates at its cap, keeps exactly one .1, and never throws 
   assert.equal(log.info().error, null);
 });
 
-check('diag: low memory is the commit charge above 85 % or free RAM under 1 GB, and a missing number is never a guess', () => {
-  // the 2026-09-12 crash: 52 of 65 GB committed is 80 % — not yet the flag, which is why the guard also watches free RAM
-  const calm = diag.memoryVerdict({ commitUsedMb: 52 * 1024, commitLimitMb: 65 * 1024, freeMb: 4096 });
-  assert.equal(calm.low, false); assert.equal(calm.commitPct, 80);
-  const tight = diag.memoryVerdict({ commitUsedMb: 60 * 1024, commitLimitMb: 65 * 1024, freeMb: 4096 });
-  assert.equal(tight.low, true); assert.equal(tight.commitPct, 92.3);
-  assert.match(tight.reasons.join(' '), /commit 92\.3%/);
-  assert.equal(diag.memoryVerdict({ commitUsedMb: 85, commitLimitMb: 100, freeMb: 4096 }).low, false);   // 85 % exactly is not "above 85 %"
-  assert.equal(diag.memoryVerdict({ commitUsedMb: 86, commitLimitMb: 100, freeMb: 4096 }).low, true);
-  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1023 }).low, true);     // free RAM alone is enough
-  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1024 }).low, false);
+check('diag: low memory is the commit charge at 80 % or more, or free RAM under 1.5 GB — and the 2026-09-12 sample trips it', () => {
+  // The whole point of the guard: the sample that preceded yesterday's silent restarts must raise the flag.
+  const crashDay = diag.memoryVerdict({ commitUsedMb: 52 * 1024, commitLimitMb: 65 * 1024, freeMb: 4181 });
+  assert.equal(crashDay.low, true); assert.equal(crashDay.commitPct, 80);
+  assert.match(crashDay.reasons.join(' '), /commit 80% of 66560 MB/);
+  assert.deepEqual(crashDay.reasons.length, 1);                                                          // commit alone; 4181 MB free is still fine
+  // and later the same evening, when free RAM had fallen away too, both rules name themselves
+  const worse = diag.memoryVerdict({ commitUsedMb: 60 * 1024, commitLimitMb: 65 * 1024, freeMb: 1000 });
+  assert.equal(worse.low, true); assert.equal(worse.commitPct, 92.3);
+  assert.match(worse.reasons.join(' '), /commit 92\.3% of 66560 MB 1000 MB free RAM/);
+  // a healthy machine stays quiet: this is the real sample measured while building T-024
+  const calm = diag.memoryVerdict({ commitUsedMb: 14060, commitLimitMb: 61142, freeMb: 6459 });
+  assert.equal(calm.low, false); assert.equal(calm.commitPct, 23);
+  // the exact boundaries, both rules
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 79.9, commitLimitMb: 100, freeMb: 4096 }).low, false);
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 80, commitLimitMb: 100, freeMb: 4096 }).low, true);     // 80 % exactly is already low
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1535 }).low, true);      // free RAM alone is enough
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1536 }).low, false);
   // nothing known: no flag, no NaN, no throw
   const blind = diag.memoryVerdict({});
   assert.equal(blind.low, false); assert.equal(blind.commitPct, null); assert.equal(blind.freeMb, null);

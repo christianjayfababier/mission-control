@@ -29,8 +29,11 @@ const SAMPLE_EVERY_MS = 60 * 1000;          // memory sample cadence
 const REPORT_EVERY_MS = 5 * 60 * 1000;      // but a `memory` warning line at most this often
 const COMMIT_CACHE_MS = 30 * 1000;          // the PowerShell query is not free; one answer serves 30 s
 const COMMIT_TIMEOUT_MS = 5000;
-const COMMIT_PCT_HIGH = 85;                 // "above 85 %" of the commit limit is in use
-const FREE_MB_LOW = 1024;                   // "below 1 GB" of free physical RAM
+// Set from the 2026-09-12 crash, not from a round number: the machine was at 52 of 65 GB committed
+// (80.0 %) with about 4 GB free when it started to wobble, and under 1 GB free by the time the window
+// died. Both rules have to catch that sample, so the commit rule fires AT 80 % as well as above it.
+const COMMIT_PCT_HIGH = 80;                 // the commit limit is 80 % or more spoken for
+const FREE_MB_LOW = 1536;                   // fewer than 1.5 GB of free physical RAM left
 const RELOAD_DELAY_MS = 1000;               // let the GPU/renderer teardown finish before reloading
 const RELOAD_QUIET_MS = 60 * 1000;          // one reload per minute: a crash loop must not spin
 
@@ -91,6 +94,8 @@ function rotate(file, maxBytes = MAX_BYTES) {
  * `commitUsedMb`/`commitLimitMb` are the Windows commit charge (the number that actually ran out on
  * 2026-09-12); `freeMb` is free physical RAM. Either one alone is enough to raise the flag. Any
  * missing input is simply not considered — never a guess, never a throw.
+ * The commit rule is inclusive: the crash this exists for sat at exactly 80.0 %, and a guard that lets
+ * its own motivating incident through is not a guard.
  * @returns {{low: boolean, commitPct: number|null, freeMb: number|null, reasons: string[]}}
  */
 function memoryVerdict({ commitUsedMb, commitLimitMb, freeMb } = {}) {
@@ -98,7 +103,7 @@ function memoryVerdict({ commitUsedMb, commitLimitMb, freeMb } = {}) {
   const used = num(commitUsedMb), limit = num(commitLimitMb), free = num(freeMb);
   const commitPct = limit && limit > 0 && used != null ? Math.round((used / limit) * 1000) / 10 : null;
   const reasons = [];
-  if (commitPct != null && commitPct > COMMIT_PCT_HIGH) reasons.push(`commit ${commitPct}% of ${Math.round(limit)} MB`);
+  if (commitPct != null && commitPct >= COMMIT_PCT_HIGH) reasons.push(`commit ${commitPct}% of ${Math.round(limit)} MB`);
   if (free != null && free < FREE_MB_LOW) reasons.push(`${Math.round(free)} MB free RAM`);
   return { low: reasons.length > 0, commitPct, freeMb: free, reasons };
 }

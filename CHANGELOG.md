@@ -8,6 +8,23 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+### Added
+
+- A main-process crash log at `~/.claude/mission-control/logs/main.log`: one line per event with the
+  process id, rotated at 1 MB. It records startup, uncaught exceptions, unhandled rejections, a dead
+  renderer (reason and exit code, then one reload and a **The window crashed and was reloaded** banner)
+  and every step of a clean exit, so a run that simply stops is now visibly a crash. **Settings >
+  About** shows the path, its size, an **Open log** button and the last memory sample (T-024).
+- A **Low system memory** chip in the project header, from a memory guard that samples the Windows
+  commit charge and free RAM every minute and warns at 80 % committed or under 1.5 GB free — the
+  conditions under which the app vanished twice on 2026-09-12 without leaving a trace (T-024).
+
+### Fixed
+
+- `mc-board.js` and `mc-note.js` resolve a worktree back to its main checkout, so a lead running them
+  from `C:\ClaudeApps\worktrees\...` writes to the project's real board instead of a phantom one
+  ([#14](https://github.com/christianjayfababier/mission-control/pull/14), T-026).
+
 ## [0.2.0] - 2026-09-12
 
 The first version that can replace itself, and the first with a settings dialog.
