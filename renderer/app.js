@@ -558,8 +558,21 @@ function renderWorkLine(node, p, { branch, cwd }) {
 
 // ───────────── repo, account, pull requests
 function modelShort(m) { m = String(m || ''); return /fable/i.test(m) ? 'fable' : /opus/i.test(m) ? 'opus' : /sonnet/i.test(m) ? 'sonnet' : /haiku/i.test(m) ? 'haiku' : m ? m.replace(/^claude-/, '').slice(0, 14) : '?'; }
+/** Dev marker (D-016): a checkout copy says so in the header and in the window title, so a screenshot or a
+    glance at the task bar never leaves it unclear which of the two Mission Controls you are looking at.
+    `packaged` comes from the `env` payload (app.isPackaged); an older payload without it marks nothing. */
+function devChip() {
+  const env = (state && state.env) || {};
+  if (env.packaged !== false) return null;
+  const t = 'Mission Control (dev)'; if (document.title !== t) document.title = t;
+  const c = el('span', 'acct dev-chip', 'dev · ' + (env.version || '?'));
+  c.title = 'Running from the checkout, not the installed Mission Control.';
+  return c;
+}
 function renderHeader(p) {
-  const r = $('#ph-repo'); r.innerHTML = ''; if (!p || !p.path) return;
+  const r = $('#ph-repo'); r.innerHTML = '';
+  const dev = devChip(); if (dev) r.appendChild(dev);   // shown with or without a project selected
+  if (!p || !p.path) return;
   if (p.repo) { const a = el('a', null, '⎇ ' + p.repo.full); a.title = p.repo.url; a.onclick = () => window.mc.openUrl(p.repo.url); r.appendChild(a); }
   else r.appendChild(el('span', null, p.remote ? 'remote: ' + p.remote : 'no GitHub remote'));
   if (p.branch) r.appendChild(el('span', null, 'on ' + p.branch));
