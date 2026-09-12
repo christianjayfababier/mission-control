@@ -22,6 +22,7 @@ const globalsettings = require('./globalsettings');
 const { Secrets, electronEncryptor } = require('./secrets');
 const newproject = require('./newproject-lib');
 const updater = require('./updater');
+const diag = require('./diag');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -53,13 +54,34 @@ function sweepShotProfiles() {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* still in use; the next run gets it */ }
   }
 }
-/** Screenshot mode only: print renderer problems where the smoke test can see them, and fail the run. */
-function rendererError(text) { rendererFailed = true; console.error('RENDERER ERROR: ' + String(text).replace(/[\r\n]+/g, ' ')); } // one line, so the test can grep for it
+// ── crash evidence (T-024, diag.js): the black box. Installed before anything below can throw, so a
+// failure while the other modules are still loading still lands in DATA_DIR/logs/main.log. In a
+// packaged app it also swallows Electron's "A JavaScript error occurred in the main process" box:
+// nobody is standing there to click it, and the log now says more than the box ever did.
+const diagnostics = diag.installHandlers({
+  app, dialog, dataDir: DATA_DIR, screenshot: !!SCREENSHOT,
+  send: (payload) => { if (win && !win.isDestroyed()) win.webContents.send('diag', payload); },
+  // A main-process throw used to take a screenshot run down with a non-zero exit, which is the only
+  // thing test/smoke.js measures. Catching it must not quietly turn a broken build into a passing test.
+  onFatal: SCREENSHOT ? (err) => { console.error('MAIN ERROR: ' + String((err && err.stack) || err).replace(/[\r\n]+/g, ' ')); app.exit(1); } : null,
+});
+/**
+ * A renderer problem, routed by mode. Screenshot mode is the smoke test: it wants the one-line
+ * `RENDERER ERROR:` on stderr and a non-zero exit, unchanged. Every other run wants it in the log
+ * file, because the launcher `start`s electron.exe and stderr goes nowhere — that is exactly how
+ * 2026-09-12 left no trace.
+ */
+function rendererError(text) {
+  const line = String(text).replace(/[\r\n]+/g, ' ');   // one line, so the test can grep for it
+  if (SCREENSHOT) { rendererFailed = true; console.error('RENDERER ERROR: ' + line); }
+  else diagnostics.write('error', 'renderer', line);
+}
 function watchRendererErrors(wc) {
   // Electron 38: the listener gets a details object ({ message, level, lineNumber, sourceId }); the old
   // positional (level, message, line, sourceId) args are deprecated.
   wc.on('console-message', (details) => { if (details && details.level === 'error') rendererError(`console ${details.sourceId || '?'}:${details.lineNumber || 0} ${details.message}`); });
-  wc.on('render-process-gone', (_e, details) => rendererError(`render process gone: ${details && details.reason} (exit ${details && details.exitCode})`));
+  // Outside screenshot mode diag.js owns this one: it logs the reason and the exit code and reloads the window once.
+  wc.on('render-process-gone', (_e, details) => { if (SCREENSHOT) rendererError(`render process gone: ${details && details.reason} (exit ${details && details.exitCode})`); });
   wc.on('preload-error', (_e, preloadPath, error) => rendererError(`preload ${preloadPath}: ${(error && error.stack) || error}`));
 }
 // Orchestrator rules: appended to the lead session's system prompt (claude --append-system-prompt-file).
@@ -210,12 +232,16 @@ function createWindow() {
     backgroundColor: '#0d1117', title: 'Mission Control', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
-  if (SCREENSHOT) watchRendererErrors(win.webContents);
+  watchRendererErrors(win.webContents);   // every mode now: screenshot mode prints, every other run logs (T-024)
+  diagnostics.setWindow(win);             // render-process-gone → the log, then one reload with a banner
+  // A deliberate renderer crash, for proving the recovery path. Off unless the environment asks for it.
+  if (process.env.MC_DIAG_CRASH_TEST === '1') setTimeout(() => { try { diagnostics.write('warn', 'diag-crash-test', 'MC_DIAG_CRASH_TEST=1: crashing the renderer on purpose'); win.webContents.forcefullyCrashRenderer(); } catch (e) { diagnostics.write('error', 'diag-crash-test', e); } }, Number(process.env.MC_DIAG_CRASH_AFTER_MS) || 6000);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron });
+    win.webContents.send('diag', diagnostics.state());   // low-memory chip and, after a crash, the reload banner
     sendSnapshot();
     if (updates) win.webContents.send('update', updates.state());
     setTimeout(() => probeProviders(false), 600);   // accounts & AI: first probe round, pushed result by result
@@ -533,6 +559,11 @@ ipcMain.handle('memory:read', (_e, { path: projectPath, slug }) => {
 });
 ipcMain.handle('open:path', (_e, p) => shell.openPath(p));
 
+// ── crash evidence (T-024): where the log is, how big it got, and the last memory sample. The
+// renderer only ever reads this; the "Open log" button goes back through open:path like every other file.
+ipcMain.handle('diag:info', () => diagnostics.infoNow());
+ipcMain.on('diag:ack', () => diagnostics.clearCrash());   // the banner is dismissed: never show it again on its own
+
 // ── terminals (node-pty)
 /**
  * One project terminal: node-pty plus this project's GitHub account (GH_TOKEN), git identity and the API keys
@@ -598,5 +629,5 @@ ipcMain.handle('update:check', () => (updates ? updates.check() : { state: 'disa
 ipcMain.handle('update:install', () => (updates ? updates.installNow() : { error: 'the updater is not running' }));
 
 app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); startUpdater(); setTimeout(() => refreshIntegrations(true), 1500); });
-app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); if (updates) updates.stop(); app.quit(); });
+app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); if (updates) updates.stop(); diagnostics.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });
