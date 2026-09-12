@@ -1,7 +1,7 @@
 /* Accounts & AI — the tools Mission Control and its workers run, and the keys they run with.
    Two homes: the Accounts & AI section of the global Settings dialog (the cog in the sidebar, owned by
    settings.js, which calls mount() when that section is shown), and the per-project AI button in the
-   header, which opens #dlg-ai with the "providers this project may use" checklist. Data comes from the
+   header, which opens #dlg-ai ("AI Collaboration") with one switch per provider. Data comes from the
    main process over docs/ACCOUNTS-CONTRACT.md: window.mc.providersList / providersRefresh /
    providersLogin / providersInstall / providersSetEnabled / secretSet / secretRemove / onProviders.
    Load order: persona.js → app.js → explorer.js → board.js → rules.js → accounts.js → settings.js. It
@@ -175,7 +175,34 @@
 
   async function reload(force) { if (force) status('running the status probes…'); await load(force); render(); if (force) status('status refreshed'); }
 
-  // ───────── the per-project checklist: the AI button in the project header
+  // ───────── AI Collaboration: the per-project provider list behind the header button
+  // One short line per provider — the long version lives in Settings → Accounts & AI.
+  const AI_LINE = {
+    claude: 'Runs this project’s lead and workers.',
+    github: 'Branches, PRs and this project’s token.',
+    codex: 'OpenAI’s coding agent.',
+    gemini: 'Google’s CLI agent.',
+    'anthropic-key': 'Used instead of the subscription login when set.',
+    'openai-key': 'For Codex in API-key mode and OpenAI SDKs.',
+    'gemini-key': 'Lets the Gemini CLI run without the browser login.',
+  };
+  const AI_HINT = { required: 'Mission Control’s own tools.', ai: 'Extra agents a worker may call.', keys: 'These are what actually get withheld.' };
+
+  /** A styled checkbox: a real input (so the keyboard and the screen reader get it) behind a CSS track. */
+  function switchEl(on, label, onChange) {
+    const wrap = el('label', 'sw');
+    const input = el('input', 'sw-input'); input.type = 'checkbox'; input.checked = !!on;
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-checked', on ? 'true' : 'false');
+    input.setAttribute('aria-label', label);
+    const track = el('span', 'sw-track'); track.appendChild(el('span', 'sw-knob'));
+    input.onchange = () => { input.setAttribute('aria-checked', input.checked ? 'true' : 'false'); onChange(input.checked); };
+    wrap.appendChild(input); wrap.appendChild(track);
+    return wrap;
+  }
+
+  const aiStatus = (m) => { const s = $('#ai-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 4000); };
+
   async function projectChecklist(box, projectPath) {
     if (!box) return;
     box.innerHTML = '';
@@ -187,17 +214,45 @@
     const proj = (window.MC && window.MC.currentProject()) || null;
     const own = (proj && proj.settings && proj.settings.providers) || {};
     const glob = (data && data.global) || {};
-    for (const p of (data && data.providers) || []) {
-      const lab = el('label', 'prov-chk');
-      const cb = el('input'); cb.type = 'checkbox';
-      cb.checked = typeof own[p.id] === 'boolean' ? own[p.id] : (typeof glob[p.id] === 'boolean' ? glob[p.id] : true);
-      cb.onchange = () => { api.setEnabled(projectPath, p.id, cb.checked); };
-      lab.appendChild(cb);
-      lab.appendChild(el('span', 'prov-chk-name', p.name));
-      if (p.envVar) lab.appendChild(el('span', 'prov-chk-var', p.envVar));
-      lab.title = p.envVar ? `Unticked: ${p.envVar} stays out of this project's terminals.` : 'Recorded for this project; this tool has no key to withhold.';
-      box.appendChild(lab);
+    const list = (data && data.providers) || [];
+    const enabledOf = (p) => (typeof own[p.id] === 'boolean' ? own[p.id] : (typeof glob[p.id] === 'boolean' ? glob[p.id] : true));
+    const live = new Map(list.map((p) => [p.id, enabledOf(p)]));
+    const count = () => { const on = [...live.values()].filter(Boolean).length; const s = $('#ai-status'); if (s && !s.dataset.flash) s.textContent = `${on} of ${live.size} enabled for this project`; };
+
+    for (const g of GROUPS) {
+      const members = list.filter(g.match); if (!members.length) continue;
+      const sec = el('section', 'acct-group');
+      const h = el('div', 'acct-group-head');
+      h.appendChild(el('span', 'acct-group-title', g.title));
+      h.appendChild(el('span', 'muted small', AI_HINT[g.id] || ''));
+      sec.appendChild(h);
+      for (const p of members) {
+        const row = el('div', 'ai-row');
+        const who = el('div', 'ai-who');
+        const name = el('div', 'ai-name', p.name);
+        if (p.envVar) name.appendChild(el('span', 'acct-var', p.envVar));
+        who.appendChild(name);
+        // the honest footnote: a CLI toggle records a preference, a key toggle actually withholds something
+        const tail = p.kind === 'key'
+          ? (data && data.secrets && data.secrets[p.id] ? '' : ' · no key stored yet')
+          : ' · records the preference; keys are what get withheld';
+        who.appendChild(el('div', 'ai-blurb', (AI_LINE[p.id] || p.blurb || '') + tail));
+        row.appendChild(who);
+        const sw = switchEl(live.get(p.id), p.name, async (on) => {
+          live.set(p.id, on); row.classList.toggle('off', !on);
+          const r = await api.setEnabled(projectPath, p.id, on);
+          if (r && r.error) { aiStatus(r.error); return; }
+          if (proj && proj.settings) proj.settings.providers = { ...(proj.settings.providers || {}), [p.id]: on };   // until the next snapshot
+          const s = $('#ai-status');
+          if (s) { s.dataset.flash = '1'; s.textContent = `saved · ${p.name} ${on ? 'enabled' : 'disabled'} here`; setTimeout(() => { delete s.dataset.flash; count(); }, 2500); }
+        });
+        row.classList.toggle('off', !live.get(p.id));
+        row.appendChild(sw);
+        sec.appendChild(row);
+      }
+      box.appendChild(sec);
     }
+    count();
   }
 
   // ───────── wiring
@@ -218,7 +273,7 @@
     if (!aiDlg || !p || !p.path) return;
     const label = $('#dlg-ai-project'); if (label) label.textContent = `${p.name} — ${p.path}`;
     if (!aiDlg.open) aiDlg.showModal();
-    await projectChecklist($('#ai-providers'), p.path);
+    await projectChecklist($('#ai-groups'), p.path);
   }
 
   if (window.mc && typeof window.mc.onProviders === 'function') {
@@ -226,7 +281,7 @@
       if (!payload) return;
       data = { ...(data || {}), ...payload };
       if (isOpen()) render();
-      if (aiOpen()) { const p = window.MC && window.MC.currentProject(); if (p && p.path) projectChecklist($('#ai-providers'), p.path); }
+      if (aiOpen()) { const p = window.MC && window.MC.currentProject(); if (p && p.path) projectChecklist($('#ai-groups'), p.path); }
     });
   }
 
