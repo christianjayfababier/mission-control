@@ -55,6 +55,7 @@
       "secrets.js",
       "globalsettings.js",
       "newproject-lib.js",
+      "setup-lib.js",
       "package.json",
       "kit/**",
       "renderer/**",
