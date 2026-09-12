@@ -78,6 +78,9 @@ function renderSidebar() {
 function currentProject() { return (state.snapshot.projects || []).find((p) => p.key === state.selected) || null; }
 window.MC = {
   currentProject: () => currentProject(), state,
+  activateTab: (id) => activateTab(id),
+  /** Show a pty the main process created (a provider login or install) as a terminal tab of this project. */
+  adoptTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title, activate: true }),
   /** Type a message into the project's lead session (or any Claude session hosted here). Returns the terminal title, or null. */
   sendToLead(p, msg) {
     let host = null; const lead = state.lead.get(p.key); if (lead) host = hostOf(lead);
@@ -166,7 +169,7 @@ function activateTab(id) {
 }
 
 // ───────────── terminals
-async function newTerminal(p, { activate = true } = {}) {
+async function newTerminal(p, { activate = true, ptyId: adopt = null, title = null } = {}) {
   if (!state.env.ptyAvailable) { alert('Terminals are unavailable: ' + (state.env.ptyError || 'node-pty failed to load')); return; }
   if (!state.terms.has(p.key)) state.terms.set(p.key, []); // claim the slot synchronously so a racing snapshot does not open a second terminal
   const container = el('div', 'pane term');
@@ -174,12 +177,15 @@ async function newTerminal(p, { activate = true } = {}) {
   const term = new Terminal({ theme: termTheme, fontFamily: '"Cascadia Mono", Consolas, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000, allowProposedApi: true });
   const fit = new FitAddon.FitAddon(); term.loadAddon(fit); term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(container); fit.fit();
-  const ptyId = await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
+  // `adopt` is a pty main.js already spawned (a provider login or install, docs/ACCOUNTS-CONTRACT.md):
+  // it is already running the command, so all this terminal does is attach a view to it.
+  const ptyId = adopt || await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
-  const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
+  const rec = { ptyId, term, fit, el: container, title: title || `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
   term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else ptySend(ptyId, () => window.mc.ptyWrite(ptyId, d)); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
+  if (adopt) { try { window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } }
   if (activate) activateTab(ptyId); else renderTabs();
   return rec;
 }
@@ -689,8 +695,38 @@ async function answerNote(n, answer) {
 })();
 
 // ───────────── data feed
-window.mc.onEnv((env) => { state.env = env;
-  if (env.startView) setTimeout(() => {
+// How long the renderer took to become usable, for the one line a screenshot run prints. The numbers are
+// milliseconds since the `env` message, which is the first thing the renderer hears from main.
+const perf = { env: 0, toSnapshot: null, toSelected: null, render: null, workers: null, workerCount: null };
+const since = () => (perf.env ? performance.now() - perf.env : null);
+/** Run `fn` once a project is selected (`idle` needs none), giving up after twenty seconds. The poll starts
+    almost at once and is quick, so the number it reports is when the project really arrived — not the delay. */
+function startViewWhenReady(view, fn) {
+  let tries = 0;
+  const MAX = 80;              // 80 x 250 ms ~= 20 s
+  const tick = () => {
+    tries++;
+    if (currentProject() && perf.toSelected == null) perf.toSelected = since();
+    if (view === 'idle' || currentProject() || tries >= MAX) {
+      fn();
+      const toView = since();
+      // Report after the browser has actually presented a frame containing the view. Two rAFs is the
+      // standard "after the next paint" signal, and on a loaded machine the gap between opening a dialog
+      // and painting it is the part that matters: a screenshot taken before it captures the page without it.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try { if (window.mc.viewReady) window.mc.viewReady({ view, toSnapshot: perf.toSnapshot, toSelected: perf.toSelected, toView, toPainted: since(), render: perf.render, workers: perf.workers, workerCount: perf.workerCount, gaveUp: tries >= MAX }); } catch { /* ignore */ }
+      }));
+      return;
+    }
+    setTimeout(tick, 250);
+  };
+  setTimeout(tick, 150);
+}
+window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performance.now();
+  // --view fired exactly once, 1.5 s in, and then did nothing at all when no project had been selected
+  // yet: on a busy machine the first snapshot lands later than that and the screenshot came out empty.
+  // Wait for a project instead, for up to six seconds.
+  if (env.startView) startViewWhenReady(env.startView, () => {
     // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
     const p = currentProject(); if (!p) return;
@@ -698,19 +734,28 @@ window.mc.onEnv((env) => { state.env = env;
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }
     // --view rules opens the Rules tab and its viewer on the first rule file the repo actually has
     if (env.startView === 'rules') { activateTab('rules'); if (window.Rules) window.Rules.openFromStartView(); return; }
+    // --view settings opens the global Settings dialog (settings-rules / -hidden / -about pick a section);
+    // --view accounts is kept as an alias for the section that used to be its own dialog
+    if (String(env.startView).startsWith('settings')) { if (window.Settings) window.Settings.openFromStartView(env.startView); return; }
+    if (env.startView === 'accounts') { if (window.Settings) window.Settings.open('accounts'); return; }
+    // --view ai opens this project's provider checklist
+    if (env.startView === 'ai') { if (window.Accounts) window.Accounts.openAi(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
-  }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
+  }); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
+  const t0 = performance.now();
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
   if (window.Explorer) window.Explorer.render(p, snap);
   if (p) {
-    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs(); renderWorkers();
+    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs();
+    const tw = performance.now(); renderWorkers(); if (perf.workers == null) { perf.workers = performance.now() - tw; perf.workerCount = (p.workers || []).length; }
     if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key));
     else if (state.activeTab.get(p.key) === 'lead') activateTab('lead'); // swaps launcher → conversation once the lead session's transcript appears
     if (p.path && !state.terms.has(p.key) && state.env.ptyAvailable) newTerminal(p, { activate: false });
   }
+  if (perf.toSnapshot == null) { perf.toSnapshot = since(); perf.render = performance.now() - t0; }
 });
 setInterval(() => { renderWorkers(); }, 1000);
 // The PR strip's two-row cap is measured against the strip's width, so a resize has to re-measure it:

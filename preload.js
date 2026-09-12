@@ -49,6 +49,21 @@ contextBridge.exposeInMainWorld('mc', {
   rulesSources: (p) => ipcRenderer.invoke('rules:sources', p),
   readText: (absPath, project) => ipcRenderer.invoke('rules:read', { path: absPath, project }), // project optional; only the project, the kit files and DATA_DIR/generated are readable
   onRules: on('rules'),
+  // accounts & AI: provider registry, status probes, logins in a terminal, encrypted API keys
+  // (docs/ACCOUNTS-CONTRACT.md). A key value only ever travels renderer → main; it never comes back.
+  providersList: () => ipcRenderer.invoke('providers:list'),
+  providersRefresh: () => ipcRenderer.invoke('providers:refresh'),
+  providersLogin: (id, projectPath) => ipcRenderer.invoke('providers:login', { id, path: projectPath || null }),
+  providersInstall: (id, projectPath) => ipcRenderer.invoke('providers:install', { id, path: projectPath || null }),
+  providersSetEnabled: (projectPath, id, enabled) => ipcRenderer.invoke('providers:enable', { path: projectPath || null, id, enabled }),
+  secretSet: (id, value) => ipcRenderer.invoke('secrets:set', { id, value }),
+  secretRemove: (id) => ipcRenderer.invoke('secrets:remove', { id }),
+  onProviders: on('providers'),
+  viewReady: (m) => ipcRenderer.send('view:ready', m),   // --view telemetry, printed by a screenshot run
+  // the global Settings dialog (the cog in the sidebar): the owner's rulebook additions and hidden projects
+  writeLocalRules: (absPath, text) => ipcRenderer.invoke('rules:writeLocal', { path: absPath, text }),
+  hiddenProjects: () => ipcRenderer.invoke('projects:hidden'),
+  unhideProject: (p) => ipcRenderer.invoke('projects:unhide', p),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
   leadPrepare: (p, name) => ipcRenderer.invoke('lead:prepare', { path: p, name }),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
