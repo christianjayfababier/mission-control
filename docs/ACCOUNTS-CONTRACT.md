@@ -102,3 +102,10 @@ Deviations from the sections above, accepted at review; T-020 codes against this
 - Enablement default: every provider is enabled unless the project or the global setting says otherwise; a key that is not stored exports nothing.
 - Login and install open a terminal tab in the selected project (or the first project with a path); with no projects the dialog says so. A saved key reaches only terminals opened afterwards.
 - Gemini `loggedIn` is always `null` (no status command); the probe reports whether `GEMINI_API_KEY` is set in the app's own environment.
+
+## Placement, after the owner's review (2026-09-12)
+
+- Machine-wide settings live in one **Settings** dialog opened from a cog (⚙) in the sidebar footer, before "+ Add/create a project". Sections: **Accounts & AI** (the content above, unchanged), **Global rules** (edit `orchestrator-system.local.md`; IPC `rules:writeLocal` writes only that file, guard in `globalsettings.js`), **Hidden projects** (IPC `projects:hidden`, `projects:unhide`), **About & diagnostics** (`env` payload gained `version` and `electron`; crash log arrives with T-024).
+- The per-project provider checklist is its own header button **AI** (`#dlg-ai`), not part of Repo & account.
+- Screenshot views: `--view settings` (alias `accounts`), `settings-rules`, `settings-hidden`, `settings-about`, `ai`.
+- Rule for later features: machine-wide goes into a Settings section, per-project goes into the project header.
