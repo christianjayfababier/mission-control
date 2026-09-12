@@ -4,7 +4,7 @@ if (!electron || !electron.app) {
   console.error('Mission Control must run under Electron. If ELECTRON_RUN_AS_NODE is set in this shell, unset it first.');
   process.exit(2);
 }
-const { app, BrowserWindow, ipcMain, dialog, shell } = electron;
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = electron;
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -17,6 +17,8 @@ const { Rules, renderOwnerRules, sources: ruleSources, readText: readRuleText } 
 const { PrWatch } = require('./prwatch');
 const explorer = require('./explorer');
 const team = require('./team');
+const providers = require('./providers');
+const { Secrets, electronEncryptor } = require('./secrets');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -73,6 +75,11 @@ function ensureKit() {
   } catch (e) { console.error('kit', e && e.message); }
 }
 const settings = new Settings(path.join(DATA_DIR, 'project-settings.json'));
+// Accounts & AI (docs/ACCOUNTS-CONTRACT.md): API keys encrypted with safeStorage, and the machine-wide
+// defaults (which providers a project may use when its own settings say nothing).
+const GLOBAL_SETTINGS = path.join(DATA_DIR, 'settings.json');
+const secrets = new Secrets(path.join(DATA_DIR, 'secrets.json'), electronEncryptor(safeStorage));
+function globalSettings() { const d = readJson(GLOBAL_SETTINGS, {}); return d && typeof d === 'object' && !Array.isArray(d) ? d : {}; }
 const github = new GitHub();
 const notes = new Notes(path.join(DATA_DIR, 'notes.jsonl'));
 const boards = new Boards(path.join(DATA_DIR, 'boards'));
@@ -203,6 +210,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT });
     sendSnapshot();
+    setTimeout(() => sendProviders(false), 600);   // accounts & AI: first probe round, pushed when it lands
     if (SCREENSHOT) setTimeout(async () => {
       let shotFailed = false;
       try {
@@ -288,6 +296,52 @@ ipcMain.handle('team:set', (_e, { path: p, name, model, effort }) => {
   else { const s = settings.get(p); const models = { ...(s.models || {}) }; if (model || effort) models[name] = { model: model || null, effort: effort || null }; else delete models[name]; settings.set(p, { models }); }
   checkpoints.journal(p, `team · owner set ${name} → ${model || 'inherit'} / ${effort || 'default'}`);
   return team.roster(p, settings.get(p).models || {});
+});
+
+// ── accounts & AI: the provider registry, its status probes, the API keys and per-project enablement
+// (docs/ACCOUNTS-CONTRACT.md). Nothing here throws across IPC and no key value ever crosses it: the
+// renderer learns `has` and `setAt`, the plain text only ever reaches a terminal's environment.
+async function providersPayload(force) {
+  let status = {};
+  try { status = await providers.statusAll({ force, keyInfo: secrets.info() }); } catch (e) { console.error('providers', e && e.message); }
+  return { providers: providers.list(), status, secrets: secrets.info(), encryption: secrets.available(), global: globalSettings().providers || {} };
+}
+async function sendProviders(force) {
+  if (!win || win.isDestroyed()) return;
+  const p = await providersPayload(force);
+  if (win && !win.isDestroyed()) win.webContents.send('providers', p);
+}
+ipcMain.handle('providers:list', () => providersPayload(false));
+ipcMain.handle('providers:refresh', async () => { const p = await providersPayload(true); if (win && !win.isDestroyed()) win.webContents.send('providers', p); return p; });
+/** A login or install runs where the owner can see it and answer it: a real terminal tab in the project. */
+async function providerTerminal(id, projectPath, line) {
+  if (!line) return { error: 'nothing to run for ' + id };
+  const dir = projectPath && fs.existsSync(projectPath) ? projectPath : os.homedir();
+  try {
+    const ptyId = await spawnPty({ cwd: dir, provider: id });
+    // the shell needs a moment before it reads stdin, or the line lands in front of the prompt
+    setTimeout(() => { const p = ptys.get(ptyId); if (p) p.proc.write(line + '\r'); }, 400);
+    return { ptyId, line, cwd: dir };
+  } catch (e) { return { error: String((e && e.message) || e).slice(0, 200) }; }
+}
+ipcMain.handle('providers:login', async (_e, { id, path: projectPath } = {}) => {
+  const status = (await providers.statusAll({ keyInfo: secrets.info() }))[id] || null;
+  return providerTerminal(id, projectPath, providers.loginLine(id, status));
+});
+ipcMain.handle('providers:install', async (_e, { id, path: projectPath } = {}) => providerTerminal(id, projectPath, providers.installLine(id)));
+ipcMain.handle('secrets:set', async (_e, { id, value } = {}) => {
+  if (!providers.byId(id) || providers.byId(id).kind !== 'key') return { error: 'unknown key provider: ' + id };
+  const r = secrets.set(id, value);
+  if (r.ok) sendProviders(false);   // no journal entry: an API key is machine-wide, not a project event
+  return r;
+});
+ipcMain.handle('secrets:remove', (_e, { id } = {}) => { const r = secrets.remove(id); if (r.ok) sendProviders(false); return r; });
+/** `path` null means the machine-wide default; a project's own setting always wins over it. */
+ipcMain.handle('providers:enable', (_e, { path: p, id, enabled } = {}) => {
+  if (!providers.byId(id)) return { error: 'unknown provider: ' + id };
+  if (p) { const s = settings.get(p); const next = { ...(s.providers || {}), [id]: !!enabled }; settings.set(p, { providers: next }); return { path: p, providers: next }; }
+  const g = globalSettings(); g.providers = { ...(g.providers || {}), [id]: !!enabled }; writeJson(GLOBAL_SETTINGS, g);
+  return { path: null, providers: g.providers };
 });
 
 // ── inbox: the owner answers or dismisses the orchestrator's notes
@@ -411,25 +465,35 @@ ipcMain.handle('memory:read', (_e, { path: projectPath, slug }) => {
 ipcMain.handle('open:path', (_e, p) => shell.openPath(p));
 
 // ── terminals (node-pty)
-ipcMain.handle('pty:create', async (_e, { cwd, cols, rows, shellPath }) => {
+/** One terminal. `provider` marks a login/install shell so its exit re-probes the accounts (T-019). */
+async function spawnPty({ cwd, cols, rows, shellPath, provider = null } = {}) {
   if (!pty) throw new Error('node-pty unavailable: ' + ptyError);
   const id = 'pty' + (++ptySeq);
   const sh = shellPath || (process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash'));
   const args = process.platform === 'win32' && /powershell/i.test(sh) ? ['-NoLogo'] : [];
   let dir = cwd && fs.existsSync(cwd) ? cwd : os.homedir();
   // per-project GitHub account and git identity, scoped to this terminal only
-  const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const base = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   const s = settings.get(dir);
   const account = await effectiveAccount(s, (gitCache.get(keyOf(dir)) || await gitInfo(dir)).remote);
-  if (account) { const t = await github.token(account); if (t) env.GH_TOKEN = t; }
-  if (s.gitName) { env.GIT_AUTHOR_NAME = s.gitName; env.GIT_COMMITTER_NAME = s.gitName; }
-  if (s.gitEmail) { env.GIT_AUTHOR_EMAIL = s.gitEmail; env.GIT_COMMITTER_EMAIL = s.gitEmail; }
+  if (account) { const t = await github.token(account); if (t) base.GH_TOKEN = t; }
+  if (s.gitName) { base.GIT_AUTHOR_NAME = s.gitName; base.GIT_COMMITTER_NAME = s.gitName; }
+  if (s.gitEmail) { base.GIT_AUTHOR_EMAIL = s.gitEmail; base.GIT_COMMITTER_EMAIL = s.gitEmail; }
+  // … then the stored API keys of every provider this project may use. assembleEnv never overwrites a
+  // variable that already has a value, so a key exported in the owner's own shell still wins.
+  const env = providers.assembleEnv({ base, secrets: secrets.map(), projectSettings: s, globalSettings: globalSettings() });
   const proc = pty.spawn(sh, args, { name: 'xterm-256color', cols: cols || 120, rows: rows || 30, cwd: dir, env, useConpty: true });
-  ptys.set(id, { proc, cwd: dir });
+  ptys.set(id, { proc, cwd: dir, provider });
   proc.onData((d) => { if (win && !win.isDestroyed()) win.webContents.send('pty:data', { id, data: d }); });
-  proc.onExit(({ exitCode }) => { ptys.delete(id); if (win && !win.isDestroyed()) win.webContents.send('pty:exit', { id, exitCode }); });
+  proc.onExit(({ exitCode }) => {
+    ptys.delete(id);
+    if (win && !win.isDestroyed()) win.webContents.send('pty:exit', { id, exitCode });
+    // a login or install shell just ended: the tool's state has probably changed, so re-probe and push
+    if (provider) setTimeout(() => sendProviders(true), 800);
+  });
   return id;
-});
+}
+ipcMain.handle('pty:create', async (_e, opts) => spawnPty(opts || {}));
 ipcMain.on('pty:write', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.proc.write(data); });
 ipcMain.on('pty:resize', (_e, { id, cols, rows }) => { const p = ptys.get(id); if (p && cols > 0 && rows > 0) { try { p.proc.resize(cols, rows); } catch { /* ignore */ } } });
 ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); } });
