@@ -6,6 +6,8 @@ const { postMergeVerdict } = require('../prwatch.js');
 const { parsePorcelain, parseNameStatus, parseWorktrees } = require('../explorer.js');
 const { relTo } = require('../transcripts.js');
 const { Rules, renderOwnerRules, readText, sources, localDay } = require('../rules.js');
+const prov = require('../providers.js');
+const { Secrets } = require('../secrets.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -204,6 +206,135 @@ check('mc-board.js rule add | list | remove writes the same file (MC_DATA_DIR ho
   assert.equal(run('rule', 'remove', 'R-009'), 'not found: R-009');
   assert.equal(run('todo', 'add', 'untouched'), 'added D-001');            // the older verbs still work
   assert.equal(run('ticket', 'list'), 'no tickets');
+});
+
+
+// -- accounts & AI (docs/ACCOUNTS-CONTRACT.md): the registry's shape, the pure env assembly, the secrets
+// file format against a fake encryptor, and the status parsers fed the output real vendors printed here.
+check('registry: every provider has the fields the renderer and the wizard rely on, and list() drops the probes', () => {
+  const ids = prov.PROVIDERS.map((p) => p.id);
+  assert.deepEqual(ids, ['claude', 'github', 'codex', 'gemini', 'anthropic-key', 'openai-key', 'gemini-key']);
+  for (const p of prov.PROVIDERS) {
+    assert.ok(p.name && p.docs, p.id + ' needs a name and a docs link');
+    assert.ok(['cli', 'key'].includes(p.kind));
+    assert.ok(['required', 'ai', 'vcs'].includes(p.role));
+    if (p.kind === 'cli') { assert.ok(p.bin, p.id + ' needs a bin'); assert.equal(typeof p.status, 'function'); assert.ok(p.install, p.id + ' needs an install line'); }
+    else { assert.ok(/^[A-Z_]+$/.test(p.envVar), p.id + ' needs an env var'); assert.equal(p.status, undefined); }
+  }
+  // the install lines are the ones the contract verified; gemini has no winget package
+  assert.match(prov.installLine('claude'), /^winget install --id Anthropic\.ClaudeCode -e /);
+  assert.match(prov.installLine('github'), /^winget install --id GitHub\.cli -e /);
+  assert.equal(prov.installLine('gemini'), 'npm install -g @google/gemini-cli');
+  assert.equal(prov.byId('github').login, 'gh auth login -h github.com -w');
+  const serialized = prov.list();
+  assert.equal(serialized.length, prov.PROVIDERS.length);
+  for (const p of serialized) assert.equal(p.status, undefined);
+  assert.doesNotThrow(() => JSON.stringify(serialized));   // it has to survive the IPC boundary
+});
+
+check('assembleEnv: an enabled key is exported, a disabled one is not, and the base environment always wins', () => {
+  const secrets = { 'openai-key': 'sk-open', 'anthropic-key': 'sk-anthropic', 'gemini-key': 'g-key' };
+  const all = prov.assembleEnv({ base: { PATH: 'x' }, secrets });
+  assert.equal(all.OPENAI_API_KEY, 'sk-open');
+  assert.equal(all.ANTHROPIC_API_KEY, 'sk-anthropic');
+  assert.equal(all.GEMINI_API_KEY, 'g-key');
+  assert.equal(all.PATH, 'x');                                            // untouched
+
+  const off = prov.assembleEnv({ base: {}, secrets, projectSettings: { providers: { 'openai-key': false } } });
+  assert.equal(off.OPENAI_API_KEY, undefined);                            // this project may not use it
+  assert.equal(off.ANTHROPIC_API_KEY, 'sk-anthropic');                    // the others are unaffected
+
+  const globalOff = prov.assembleEnv({ base: {}, secrets, globalSettings: { providers: { 'gemini-key': false } } });
+  assert.equal(globalOff.GEMINI_API_KEY, undefined);                      // machine-wide default
+  const projectWins = prov.assembleEnv({ base: {}, secrets, projectSettings: { providers: { 'gemini-key': true } }, globalSettings: { providers: { 'gemini-key': false } } });
+  assert.equal(projectWins.GEMINI_API_KEY, 'g-key');                      // the project overrides the default
+
+  const shell = prov.assembleEnv({ base: { OPENAI_API_KEY: 'from-the-shell' }, secrets });
+  assert.equal(shell.OPENAI_API_KEY, 'from-the-shell');                   // never overwrite a base variable
+
+  assert.equal(prov.assembleEnv({ base: {}, secrets: {} }).OPENAI_API_KEY, undefined);   // nothing stored, nothing exported
+  assert.equal(prov.isEnabled('openai-key', {}, {}), true);                              // default: enabled
+});
+
+check('secrets.json: version 1, base64 ciphertext and a setAt, and no plain text anywhere in the file', () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'sec-'));
+  const file = path.join(dir, 'secrets.json');
+  // a fake encryptor, so this test needs no Electron: reversible, and nothing like the plain text
+  const fake = { available: () => true, encrypt: (s) => Buffer.from('ENC:' + Buffer.from(s, 'utf8').toString('hex'), 'utf8'), decrypt: (b) => Buffer.from(String(b).slice(4), 'hex').toString('utf8') };
+  const s = new Secrets(file, fake);
+  assert.equal(s.has('openai-key'), false);
+  assert.deepEqual(s.list(), []);
+  const r = s.set('openai-key', 'sk-test-123');
+  assert.equal(r.ok, true); assert.match(r.setAt, /^\d{4}-\d{2}-\d{2}T/);
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk.version, 1);
+  assert.deepEqual(Object.keys(onDisk.keys), ['openai-key']);
+  assert.equal(onDisk.keys['openai-key'].setAt, r.setAt);
+  assert.match(onDisk.keys['openai-key'].enc, /^[A-Za-z0-9+/=]+$/);
+  assert.equal(fs.readFileSync(file, 'utf8').includes('sk-test-123'), false);   // the point of the whole file
+  assert.equal(s.get('openai-key'), 'sk-test-123');                             // main process only
+  assert.deepEqual(s.list(), [{ id: 'openai-key', setAt: r.setAt }]);
+  assert.deepEqual(s.info(), { 'openai-key': { setAt: r.setAt } });             // what the renderer may know
+  assert.deepEqual(s.map(), { 'openai-key': 'sk-test-123' });                   // what pty:create uses
+  assert.equal(prov.assembleEnv({ base: {}, secrets: s.map() }).OPENAI_API_KEY, 'sk-test-123');
+  s.remove('openai-key');
+  assert.equal(s.has('openai-key'), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).keys, {});
+  assert.equal(s.get('openai-key'), null);
+
+  // no encryption on this machine: refuse, and write nothing at all
+  const none = new Secrets(path.join(dir, 'never.json'), { available: () => false, encrypt: () => { throw new Error('nope'); }, decrypt: () => '' });
+  assert.match(none.set('openai-key', 'sk-test-123').error, /cannot encrypt/);
+  assert.equal(fs.existsSync(path.join(dir, 'never.json')), false);
+  assert.equal(s.set('openai-key', '   ').ok, true);                            // an empty field means "forget it"
+  assert.equal(s.has('openai-key'), false);
+});
+
+check('status parsers: claude auth status JSON, gh auth status text, codex login status text, version lines', () => {
+  assert.equal(prov.parseVersion('2.1.269 (Claude Code)'), '2.1.269');
+  assert.equal(prov.parseVersion('gh version 2.97.0 (2026-07-31)\nhttps://example.test'), '2.97.0');
+  assert.equal(prov.parseVersion('codex-cli 0.153.4'), '0.153.4');
+  assert.equal(prov.parseVersion('nothing here'), null);
+
+  const claude = prov.parseClaudeStatus(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'owner@example.test', orgName: 'Example LLP', subscriptionType: 'team', configDirectory: 'C:\\x' }));
+  assert.equal(claude.loggedIn, true);
+  assert.equal(claude.account, 'owner@example.test');
+  assert.match(claude.detail, /logged in as owner@example\.test .*Example LLP.*team plan/);
+  assert.equal(prov.parseClaudeStatus('{"loggedIn":false}').loggedIn, false);
+  assert.deepEqual(prov.parseClaudeStatus('command not found'), { loggedIn: null, account: null, detail: null });
+
+  const gh = prov.parseGhStatus([
+    'github.com',
+    '  \u2713 Logged in to github.com account alpha (GH_TOKEN)',
+    '  - Active account: true',
+    '',
+    '  \u2713 Logged in to github.com account beta (keyring)',
+    '  - Active account: false',
+    '',
+    '  \u2713 Logged in to github.com account alpha (keyring)',
+    '  - Active account: false',
+  ].join('\n'));
+  assert.equal(gh.loggedIn, true);
+  assert.equal(gh.account, 'alpha');              // the active one
+  assert.equal(gh.accounts.length, 3);            // gh prints one block per login, duplicates included
+  assert.equal(gh.detail, 'logged in as alpha \u00b7 3 logins: alpha, beta');
+  const noGh = prov.parseGhStatus('You are not logged into any GitHub hosts.');
+  assert.equal(noGh.loggedIn, false); assert.deepEqual(noGh.accounts, []);
+
+  const chatgpt = prov.parseCodexLogin('Logged in using ChatGPT', true);
+  assert.equal(chatgpt.loggedIn, true); assert.equal(chatgpt.detail, 'Logged in using ChatGPT');
+  assert.equal(prov.parseCodexLogin('Logged in using an API key (owner@example.test)', true).account, 'owner@example.test');
+  assert.equal(prov.parseCodexLogin('Not logged in. Run `codex login`.', false).loggedIn, false);
+  assert.equal(prov.parseCodexLogin('', false).loggedIn, false);              // non-zero exit, nothing to read
+  assert.equal(prov.parseCodexLogin('something new', true).loggedIn, null);   // unknown, never a guess
+});
+
+check('a missing binary is "not installed", not an exception, and a stored key reports its date', () => {
+  assert.equal(prov.which('no-such-tool-' + Date.now()), null);
+  const empty = prov.keyStatus(undefined);
+  assert.equal(empty.installed, false); assert.equal(empty.detail, 'no key stored');
+  const set = prov.keyStatus({ setAt: '2026-09-12T08:00:00.000Z' });
+  assert.equal(set.installed, true); assert.equal(set.detail, 'key stored 2026-09-12');
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });
