@@ -22,6 +22,7 @@ function validateProjectName(name) {
   if (!s.trim()) return 'Enter a project name.';
   if (s !== s.trim()) return 'The name cannot start or end with a space.';
   if (/[\\/]/.test(s)) return 'The name cannot contain a path separator - pick the parent folder above instead.';
+  if (/[\`\r\n]/.test(s)) return 'The name cannot contain a backtick or a line break.';
   if (s.startsWith('.')) return 'The name cannot start with a dot.';
   if (s.endsWith('.')) return 'The name cannot end with a dot.';
   if (BAD_CHARS.test(s)) return 'The name cannot contain any of < > : " | ? *';
@@ -67,12 +68,18 @@ function addToRegistry(reg, p, now) {
 function parseRepoInput(s) { return parseRepo(s); }
 
 /**
- * What Mission Control types into the clone terminal. A folder name with a space needs quoting.
+ * What Mission Control types into the clone terminal.
+ * Both arguments are always one single-quoted literal: a folder name may legally hold ; & $ ( ) and
+ * an apostrophe on Windows, and typing one of those unquoted would hand the shell a second command
+ * to run. Single quotes are literal in PowerShell (an embedded one is doubled) and in sh (an embedded
+ * one is closed, escaped and reopened), so nothing inside either argument is ever expanded.
  * The pty is a shell, so the shell's exit code is the only one main sees: the line ends by handing
- * gh's code back, which is what turns the clone into "added to the sidebar" or "see the terminal".
+ * gh’s code back, which is what turns the clone into "added to the sidebar" or "see the terminal".
  */
 function cloneCommand(full, folder, { powershell = true } = {}) {
-  const q = (s) => (/\s/.test(String(s)) ? `"${s}"` : String(s));
+  const q = powershell
+    ? (s) => "'" + String(s).replace(/'/g, "''") + "'"                 // PowerShell: '' is a literal quote
+    : (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";             // sh: close, escape, reopen
   return `gh repo clone ${q(full)} ${q(folder)}; exit ${powershell ? '$LASTEXITCODE' : '$?'}`;
 }
 

@@ -585,6 +585,9 @@ check('project name: a folder name that Windows and the sidebar can both live wi
   assert.match(np.validateProjectName('CON'), /reserved Windows name/);
   assert.match(np.validateProjectName('lpt1.txt'), /reserved Windows name/);
   assert.match(np.validateProjectName('x'.repeat(101)), /too long/);
+  assert.match(np.validateProjectName('a`b'), /backtick or a line break/);
+  assert.match(np.validateProjectName('a\nb'), /backtick or a line break/);
+  assert.equal(np.validateProjectName('a;whoami'), null);   // legal on Windows: the clone command quotes it instead
 });
 check('repository input: a URL, a git@ remote or owner/name — anything else is not a repo', () => {
   assert.equal(np.parseRepoInput('https://github.com/octocat/Hello-World').full, 'octocat/Hello-World');
@@ -595,10 +598,17 @@ check('repository input: a URL, a git@ remote or owner/name — anything else is
   assert.equal(np.parseRepoInput('  octocat/Hello-World  ').name, 'Hello-World');
   for (const bad of ['', 'not a repo', 'https://gitlab.com/a/b', 'octocat']) assert.equal(np.parseRepoInput(bad), null, JSON.stringify(bad));
 });
-check('clone command: quoted where it must be, and it hands the gh exit code back to the shell', () => {
-  assert.equal(np.cloneCommand('octocat/Hello-World', 'Hello-World'), 'gh repo clone octocat/Hello-World Hello-World; exit $LASTEXITCODE');
-  assert.equal(np.cloneCommand('octocat/Hello-World', 'my folder'), 'gh repo clone octocat/Hello-World "my folder"; exit $LASTEXITCODE');
-  assert.match(np.cloneCommand('o/n', 'n', { powershell: false }), /; exit \$\?$/);
+check('clone command: each argument is one literal, so a folder name cannot smuggle in a second command', () => {
+  const q = (s) => "gh repo clone 'octocat/Hello-World' '" + s + "'; exit $LASTEXITCODE";
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'hello'), q('hello'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'my folder'), q('my folder'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'a;whoami'), q('a;whoami'));      // the whole name stays inside the quotes
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'x$(y)'), q('x$(y)'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'a & b'), q('a & b'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', "it's"), q("it''s"));            // PowerShell doubles an embedded quote
+  assert.equal(np.cloneCommand('o/n', 'hello', { powershell: false }), "gh repo clone 'o/n' 'hello'; exit $?");
+  assert.equal(np.cloneCommand('o/n', "it's", { powershell: false }), "gh repo clone 'o/n' 'it'\\''s'; exit $?");   // sh close-escape-reopen
+  assert.equal(np.cloneCommand("o';rm -rf /;'", 'n'), "gh repo clone 'o'';rm -rf /;''' 'n'; exit $LASTEXITCODE");   // the repo argument too
 });
 check('registry entry: added once, whatever the case or the trailing slash (the half of addProjectPath that runs under node)', () => {
   const at = new Date('2026-09-12T10:00:00.000Z');
