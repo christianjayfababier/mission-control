@@ -19,6 +19,8 @@ const dep = (env, state) => ({ kind: 'deployment', name: env, done: true, ok: st
 
 let n = 0;
 function check(title, fn) { fn(); n++; console.log('  ok  ' + title); }
+const asyncChecks = [];
+function checkAsync(title, fn) { asyncChecks.push([title, fn]); }
 
 check('all workflows and deployments succeeded → live', () => {
   const v = postMergeVerdict([wf('smoke', 'success'), dep('production', 'success')]);
@@ -212,25 +214,72 @@ check('mc-board.js rule add | list | remove writes the same file (MC_DATA_DIR ho
 
 // -- accounts & AI (docs/ACCOUNTS-CONTRACT.md): the registry's shape, the pure env assembly, the secrets
 // file format against a fake encryptor, and the status parsers fed the output real vendors printed here.
-check('registry: every provider has the fields the renderer and the wizard rely on, and list() drops the probes', () => {
+check('registry: every row carries what the dialogs need, ids and bins are unique, list() drops the probes', () => {
   const ids = prov.PROVIDERS.map((p) => p.id);
-  assert.deepEqual(ids, ['claude', 'github', 'codex', 'gemini', 'anthropic-key', 'openai-key', 'gemini-key']);
+  assert.equal(new Set(ids).size, ids.length, 'provider ids must be unique');
+  assert.equal(ids.length, 19);
+  // the AI TOOLS group draws in registry order, and the owner picked this one
+  assert.deepEqual(prov.PROVIDERS.filter((p) => p.kind === 'cli' && p.role === 'ai').map((p) => p.id),
+    ['codex', 'gemini', 'copilot', 'cursor', 'cline', 'opencode', 'aider', 'goose', 'ollama']);
+
+  const bins = prov.PROVIDERS.filter((p) => p.kind === 'cli').map((p) => p.bin);
+  assert.equal(new Set(bins).size, bins.length, 'two tools cannot own the same binary name');
+
   for (const p of prov.PROVIDERS) {
     assert.ok(p.name && p.docs, p.id + ' needs a name and a docs link');
-    assert.ok(['cli', 'key'].includes(p.kind));
-    assert.ok(['required', 'ai', 'vcs'].includes(p.role));
-    if (p.kind === 'cli') { assert.ok(p.bin, p.id + ' needs a bin'); assert.equal(typeof p.status, 'function'); assert.ok(p.install, p.id + ' needs an install line'); }
-    else { assert.ok(/^[A-Z_]+$/.test(p.envVar), p.id + ' needs an env var'); assert.equal(p.status, undefined); }
+    assert.match(p.docs, /^https:\/\//, p.id + ' docs must be a URL');
+    assert.ok(['cli', 'key'].includes(p.kind), p.id + ' kind');
+    assert.ok(['required', 'ai', 'vcs'].includes(p.role), p.id + ' role');
+    assert.ok(p.blurb, p.id + ' needs a blurb');
+    if (p.kind === 'cli') {
+      assert.ok(p.bin, p.id + ' needs a bin');
+      assert.equal(typeof p.status, 'function', p.id + ' needs a probe');
+      // install and login may be null (unverified, or the tool simply has no account), never invented
+      for (const f of ['install', 'login']) assert.ok(p[f] === null || typeof p[f] === 'string', `${p.id}.${f} must be a string or null`);
+      if (p.keys !== undefined) assert.ok(Array.isArray(p.keys), p.id + '.keys must be a list');
+    } else {
+      assert.ok(/^[A-Z][A-Z0-9_]+$/.test(p.envVar), p.id + ' needs an env var');
+      assert.equal(p.status, undefined, p.id + ' is a key: nothing to probe');
+    }
+    // a placeholder belongs in exec and nowhere else: an install or login line is run verbatim in a shell
+    for (const f of ['install', 'installFallback', 'login']) {
+      if (typeof p[f] === 'string') assert.equal(p[f].includes('{'), false, `${p.id}.${f} must not carry a placeholder`);
+    }
+    if (p.exec != null) assert.ok(p.exec.includes('{prompt}'), p.id + ' exec must carry the {prompt} placeholder');
   }
-  // the install lines are the ones the contract verified; gemini has no winget package
+
+  // every key provider is reachable from a key row, and every env var is claimed once
+  const keys = prov.PROVIDERS.filter((p) => p.kind === 'key');
+  assert.equal(keys.length, 8);
+  const vars = keys.map((p) => p.envVar);
+  assert.equal(new Set(vars).size, vars.length, 'two key providers cannot write the same variable');
+  assert.deepEqual(vars, ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'MISTRAL_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', 'CURSOR_API_KEY']);
+
+  // the lines the wizard and the dialogs actually run
   assert.match(prov.installLine('claude'), /^winget install --id Anthropic\.ClaudeCode -e /);
-  assert.match(prov.installLine('github'), /^winget install --id GitHub\.cli -e /);
+  assert.match(prov.installLine('ollama'), /^winget install --id Ollama\.Ollama -e /);
   assert.equal(prov.installLine('gemini'), 'npm install -g @google/gemini-cli');
+  assert.equal(prov.installLine('copilot'), 'npm install -g @github/copilot');
+  assert.equal(prov.installLine('goose'), null);        // unverified: no line is claimed
+  assert.equal(prov.byId('goose').login, null);
+  assert.equal(prov.byId('ollama').login, null);        // fully local, no account
+  assert.equal(prov.byId('aider').login, null);         // keys only
   assert.equal(prov.byId('github').login, 'gh auth login -h github.com -w');
+
   const serialized = prov.list();
   assert.equal(serialized.length, prov.PROVIDERS.length);
   for (const p of serialized) assert.equal(p.status, undefined);
   assert.doesNotThrow(() => JSON.stringify(serialized));   // it has to survive the IPC boundary
+});
+
+check('the Cursor CLI owns a generic binary name, so its version line has to name the tool', () => {
+  assert.equal(prov.byId('cursor').bin, 'agent');
+  assert.equal(prov.isCursorAgent('cursor-agent 2026.09.01'), true);
+  assert.equal(prov.isCursorAgent('Cursor Agent 1.2.3'), true);
+  assert.equal(prov.isCursorAgent('agent 0.9'), true);                    // the tool's own bare name
+  assert.equal(prov.isCursorAgent('GNU Screen 4.9.0'), false);            // some other `agent` on PATH
+  assert.equal(prov.isCursorAgent(''), false);
+  assert.equal(prov.isCursorAgent(null), false);
 });
 
 check('assembleEnv: an enabled key is exported, a disabled one is not, and the base environment always wins', () => {
@@ -416,16 +465,50 @@ check('readiness: a tool that is missing, logged out or keyless, and one that is
   assert.deepEqual(prov.readiness({ kind: 'cli', name: 'X', install: 'x' }, { installed: true, loggedIn: false }, false).actions, []);
 });
 
-check('exec: the optional one-shot template, only where the command is verified', () => {
+check('exec: the one-shot templates, only where the command is verified, and Ollama needs a model too', () => {
   assert.equal(prov.byId('claude').exec, 'claude -p "{prompt}"');
   assert.equal(prov.byId('codex').exec, 'codex exec "{prompt}"');
+  assert.equal(prov.byId('gemini').exec, 'gemini -p "{prompt}"');
+  assert.equal(prov.byId('aider').exec, 'aider --message "{prompt}" --yes-always');
+  assert.equal(prov.byId('goose').exec, null);            // unverified, so nothing is claimed
+  // Ollama is the one template with a second placeholder: it has to be told which local model to run
+  assert.equal(prov.byId('ollama').exec, 'ollama run {model} "{prompt}"');
+  const placeholders = (s) => [...String(s).matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
   for (const p of prov.PROVIDERS) {
-    if (p.exec === undefined) continue;
-    assert.ok(p.exec.includes('{prompt}'), p.id + ' exec must carry the {prompt} placeholder');
+    if (p.exec == null) continue;
+    const found = placeholders(p.exec);
+    assert.ok(found.includes('prompt'), p.id + ' exec must carry {prompt}');
+    for (const f of found) assert.ok(['prompt', 'model'].includes(f), `${p.id} exec has an unknown placeholder {${f}}`);
   }
   assert.equal(prov.list().find((p) => p.id === 'claude').exec, 'claude -p "{prompt}"');   // it crosses IPC
 });
 
-fs.rmSync(tmp, { recursive: true, force: true });
+check('a tool without a status command is installed-or-not, and never nags for a login', () => {
+  // versionProbe leaves loggedIn null on purpose, so readiness() can never ask for a login it cannot start
+  for (const id of ['copilot', 'cursor', 'cline', 'opencode', 'aider', 'goose', 'ollama']) {
+    const p = prov.byId(id);
+    assert.equal(prov.readiness(p, { installed: true, loggedIn: null }, false).ready, true, id + ' must not nag');
+    const missing = prov.readiness(p, { installed: false }, false);
+    assert.equal(missing.reason, 'not-installed');
+    assert.deepEqual(missing.actions, p.install ? ['install'] : [], id + ' offers Install only if it has a line');
+  }
+});
 
-console.log(`unit PASS  ${n} checks`);
+checkAsync('pool: every item runs, results keep their order, and never more than n at a time', async () => {
+  let live = 0, peak = 0;
+  const out = await prov.pool([1, 2, 3, 4, 5, 6, 7, 8, 9], 4, async (x) => {
+    live++; peak = Math.max(peak, live);
+    await new Promise((r) => setTimeout(r, 5));
+    live--; return x * 10;
+  });
+  assert.deepEqual(out, [10, 20, 30, 40, 50, 60, 70, 80, 90]);
+  assert.ok(peak <= 4, 'concurrency cap was exceeded: ' + peak);
+  assert.ok(peak > 1, 'nothing ran in parallel at all');
+  assert.deepEqual(await prov.pool([], 4, async () => 1), []);
+});
+
+(async () => {
+  for (const [title, fn] of asyncChecks) { await fn(); n++; console.log('  ok  ' + title); }
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log(`unit PASS  ${n} checks`);
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });

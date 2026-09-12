@@ -2,13 +2,16 @@
 /*
  providers — the accounts & AI registry (docs/ACCOUNTS-CONTRACT.md, T-019).
 
- Three jobs, none of which may throw across IPC:
+ Four jobs, none of which may throw across IPC:
  1. `PROVIDERS`: the static registry — what each tool is called, how it is installed, how it is logged in,
-    which environment variable carries its API key. `list()` is the serializable form the renderer gets.
- 2. Status probes: non-interactive `--version` / `... status` calls through child_process, run in parallel,
-    cached 60 s, every one of them wrapped so a missing binary comes back as `installed: false` and never
-    as a rejected promise. The exact commands come from the contract's "Verified commands" table.
- 3. `assembleEnv()`: pure. Given the base environment, the decrypted keys and the enablement settings it
+    which environment variable carries its API key. One plain object per tool: adding a row is adding an
+    object, never a code branch. `list()` is the serializable form the renderer gets.
+ 2. Status probes: non-interactive `--version` / `... status` calls through child_process, four at a time,
+    cached 60 s, every one wrapped so a missing binary comes back as `installed: false` and never as a
+    rejected promise. The commands come from the contract's "Verified commands" table and from the lead's
+    research; a field the research could not confirm is null here, never guessed.
+ 3. `readiness()`: pure. Is a provider the owner switched on actually usable, and if not, what fixes it.
+ 4. `assembleEnv()`: pure. Given the base environment, the decrypted keys and the enablement settings it
     returns the environment a new terminal gets. Unit-tested; no I/O, no Electron.
 
  Windows details that matter here: `claude` is an npm shim (`claude.cmd`), which CreateProcess cannot run
@@ -21,8 +24,13 @@ const os = require('os');
 const { execFile } = require('child_process');
 
 const WINGET = (id) => `winget install --id ${id} -e --accept-source-agreements --accept-package-agreements`;
+const KEY_BLURB = 'Used by Aider, Cline, Goose and OpenCode when you pick that provider.';
 
 // ── the registry ─────────────────────────────────────────────────────────────────────────────────
+// `keys` is informational: the environment variables a tool reads. It drives no UI yet; the owner's
+// multi-AI work will use it to say which key makes which tool go.
+// `exec` is the one-shot, non-interactive form of the tool, with a {prompt} placeholder (and {model} for
+// Ollama). No UI yet either. A field the research could not verify is null, and stays null.
 const PROVIDERS = [
   {
     id: 'claude', name: 'Claude Code', kind: 'cli', role: 'required', bin: 'claude',
@@ -30,6 +38,7 @@ const PROVIDERS = [
     installFallback: 'irm https://claude.ai/install.ps1 | iex',
     login: 'claude auth login',
     exec: 'claude -p "{prompt}"',            // verified locally: -p/--print runs one prompt and exits
+    keys: ['ANTHROPIC_API_KEY'],
     docs: 'https://code.claude.com/docs/en/authentication',
     blurb: 'Mission Control supervises Claude Code sessions; without it nothing here runs.',
     status: probeClaude,
@@ -38,6 +47,7 @@ const PROVIDERS = [
     id: 'github', name: 'GitHub CLI', kind: 'cli', role: 'required', bin: 'gh',
     winget: 'GitHub.cli', install: WINGET('GitHub.cli'),
     login: 'gh auth login -h github.com -w',
+    keys: ['GH_TOKEN'],
     docs: 'https://cli.github.com/manual/gh_auth_login',
     blurb: 'Branches, pull requests and the per-project token every terminal gets.',
     status: probeGithub,
@@ -48,17 +58,91 @@ const PROVIDERS = [
     installFallback: 'npm install -g @openai/codex',
     login: 'codex login',
     exec: 'codex exec "{prompt}"',           // verified locally: `codex exec` runs Codex non-interactively
-    docs: 'https://learn.chatgpt.com/docs/auth',
-    blurb: 'OpenAI’s coding agent. The ChatGPT desktop app bundles it off PATH; Mission Control finds it there too.',
+    keys: ['OPENAI_API_KEY'],
+    docs: 'https://github.com/openai/codex/blob/main/docs/install.md',
+    blurb: 'OpenAI’s coding agent. The vendor documents WSL2 as the supported Windows path, but the native codex.exe the ChatGPT desktop app installs off PATH runs here, and Mission Control finds it there.',
     status: probeCodex,
   },
   {
     id: 'gemini', name: 'Google Gemini CLI', kind: 'cli', role: 'ai', bin: 'gemini',
     winget: null, install: 'npm install -g @google/gemini-cli',
-    login: 'gemini',
-    docs: 'https://www.npmjs.com/package/@google/gemini-cli',
+    login: 'gemini',                         // no separate login verb: the first run opens the Google flow
+    exec: 'gemini -p "{prompt}"',
+    keys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    docs: 'https://geminicli.com/docs/get-started/authentication',
     blurb: 'Google’s CLI agent. It has no status command: the first run opens the Google login.',
     status: probeGemini,
+  },
+  {
+    id: 'copilot', name: 'GitHub Copilot CLI', kind: 'cli', role: 'ai', bin: 'copilot',
+    winget: null, install: 'npm install -g @github/copilot',
+    login: 'copilot login',
+    exec: 'copilot -p "{prompt}"',
+    keys: ['GITHUB_TOKEN'],
+    docs: 'https://docs.github.com/en/copilot/how-tos/copilot-cli',
+    // the older `gh copilot` extension is deprecated, and is deliberately not probed
+    blurb: 'GitHub’s own agent. It signs in with your GitHub account, so the per-project token Mission Control already injects may cover it.',
+    status: versionProbe('copilot'),
+  },
+  {
+    id: 'cursor', name: 'Cursor CLI', kind: 'cli', role: 'ai', bin: 'agent',
+    winget: null, install: "irm 'https://cursor.com/install?win32=true' | iex",
+    login: 'agent login',
+    exec: 'agent -p "{prompt}" --output-format json',
+    keys: ['CURSOR_API_KEY'],
+    docs: 'https://cursor.com/docs/cli/installation',
+    blurb: 'Cursor’s terminal agent. Its binary is called `agent`, so Mission Control reads the version line before believing it.',
+    status: versionProbe('agent', { accept: isCursorAgent }),
+  },
+  {
+    id: 'cline', name: 'Cline CLI', kind: 'cli', role: 'ai', bin: 'cline',
+    winget: null, install: 'npm install -g cline',
+    login: 'cline auth',
+    exec: 'cline "{prompt}"',
+    keys: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'],
+    docs: 'https://docs.cline.bot/cli/cli-reference',
+    blurb: 'Cline in the terminal. It runs on the Anthropic or OpenAI key you give it.',
+    status: versionProbe('cline'),
+  },
+  {
+    id: 'opencode', name: 'OpenCode', kind: 'cli', role: 'ai', bin: 'opencode',
+    winget: null, install: 'npm install -g opencode-ai@latest',
+    login: 'opencode auth login',
+    exec: 'opencode run "{prompt}" --format json',
+    keys: [],
+    docs: 'https://opencode.ai/docs/cli',
+    blurb: 'A terminal coding agent that keeps its own provider logins.',
+    status: versionProbe('opencode'),
+  },
+  {
+    id: 'aider', name: 'Aider', kind: 'cli', role: 'ai', bin: 'aider',
+    winget: null, install: 'irm https://aider.chat/install.ps1 | iex',
+    login: null,                             // no account: it reads provider keys from the environment
+    exec: 'aider --message "{prompt}" --yes-always',
+    keys: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY'],
+    docs: 'https://aider.chat/docs/install.html',
+    blurb: 'Pair programming in the terminal. There is no login: it uses whichever provider key is in the environment.',
+    status: versionProbe('aider'),
+  },
+  {
+    id: 'goose', name: 'Goose', kind: 'cli', role: 'ai', bin: 'goose',
+    winget: null, install: null,             // unverified: the repo moved orgs, so no install line is claimed
+    login: null,                             // `goose configure` picks a provider; it is not a login
+    exec: null,                              // unverified
+    keys: [],
+    docs: 'https://github.com/block/goose',
+    blurb: 'Block’s local agent. Install it from the vendor docs, then `goose configure` picks a provider.',
+    status: versionProbe('goose'),
+  },
+  {
+    id: 'ollama', name: 'Ollama', kind: 'cli', role: 'ai', bin: 'ollama',
+    winget: 'Ollama.Ollama', install: WINGET('Ollama.Ollama'),
+    login: null,                             // fully local: there is no account to log in to
+    exec: 'ollama run {model} "{prompt}"',   // the only exec with a second placeholder
+    keys: [],
+    docs: 'https://ollama.com',
+    blurb: 'Runs open models locally; no account, no key.',
+    status: versionProbe('ollama'),
   },
   {
     id: 'anthropic-key', name: 'Anthropic API key', kind: 'key', role: 'ai', envVar: 'ANTHROPIC_API_KEY',
@@ -72,9 +156,14 @@ const PROVIDERS = [
   },
   {
     id: 'gemini-key', name: 'Google Gemini API key', kind: 'key', role: 'ai', envVar: 'GEMINI_API_KEY',
-    docs: 'https://aistudio.google.com/apikey',
+    docs: 'https://aistudio.google.com/app/apikey',
     blurb: 'Lets the Gemini CLI and the Google SDKs run without the browser login.',
   },
+  { id: 'xai-key', name: 'xAI API key', kind: 'key', role: 'ai', envVar: 'XAI_API_KEY', docs: 'https://console.x.ai', blurb: KEY_BLURB },
+  { id: 'mistral-key', name: 'Mistral API key', kind: 'key', role: 'ai', envVar: 'MISTRAL_API_KEY', docs: 'https://console.mistral.ai', blurb: KEY_BLURB },
+  { id: 'deepseek-key', name: 'DeepSeek API key', kind: 'key', role: 'ai', envVar: 'DEEPSEEK_API_KEY', docs: 'https://platform.deepseek.com', blurb: KEY_BLURB },
+  { id: 'openrouter-key', name: 'OpenRouter API key', kind: 'key', role: 'ai', envVar: 'OPENROUTER_API_KEY', docs: 'https://openrouter.ai/keys', blurb: 'One key for many models. ' + KEY_BLURB },
+  { id: 'cursor-key', name: 'Cursor API key', kind: 'key', role: 'ai', envVar: 'CURSOR_API_KEY', docs: 'https://cursor.com/docs/cli', blurb: 'Lets the Cursor CLI run headless, without the browser login.' },
 ];
 const byId = (id) => PROVIDERS.find((p) => p.id === id) || null;
 /** The registry as the renderer sees it: JSON only, no probe functions. */
@@ -153,9 +242,34 @@ function parseCodexLogin(out, ok) {
   if (!ok) return { loggedIn: false, account: null, detail: 'not logged in' };
   return { loggedIn: null, account: null, detail: s ? s.split(/\r?\n/)[0].slice(0, 120) : 'login state unknown' };
 }
+/**
+ * The Cursor CLI installs itself as `agent` — a name anything could own. Only believe a version line that
+ * names the tool; otherwise an unrelated `agent` on this PATH would report Cursor as installed.
+ */
+function isCursorAgent(out) { return /cursor|agent/i.test(String(out || '')); }
 
 // ── probes (each returns a Status; none of them throws) ──────────────────────────────────────────
 const NOT_INSTALLED = (extra) => ({ installed: false, version: null, loggedIn: null, account: null, detail: 'not installed', ...extra });
+
+/**
+ * The probe every tool without a documented status command gets: find the binary, ask it its version, and
+ * stop there. `loggedIn` stays null, so such a tool never nags the owner to log in — the dialogs only offer
+ * "Log in" when the registry has a login line. `accept` is an extra check on the version output, for a
+ * binary whose name is too generic to trust on its own (Cursor's `agent`).
+ */
+function versionProbe(bin, { accept = null, timeout = 5000 } = {}) {
+  return async function probe() {
+    const found = which(bin);
+    if (!found) return NOT_INSTALLED();
+    let r = await run(found, ['--version'], { timeout });
+    let out = r.stdout + r.stderr;
+    if (!parseVersion(out)) { r = await run(found, ['-v'], { timeout }); out = r.stdout + r.stderr; }   // some tools only take -v
+    const version = parseVersion(out);
+    if (accept && !accept(out)) return NOT_INSTALLED({ detail: `another program owns "${bin}" on this PATH` });
+    if (!version && !r.ok) return NOT_INSTALLED({ detail: 'found on PATH but it did not answer --version' });
+    return { installed: true, version, path: found, loggedIn: null, account: null, detail: version ? 'installed · v' + version : 'installed' };
+  };
+}
 
 async function probeClaude() {
   const bin = which('claude');
@@ -212,12 +326,11 @@ function keyStatus(entry) {
   return { installed: !!setAt, version: null, loggedIn: setAt ? true : null, account: null, detail: setAt ? 'key stored ' + String(setAt).slice(0, 10) : 'no key stored', at: Date.now() };
 }
 
-
 // ── readiness: is a provider this project switched on actually usable? ────────────────────────────
 /**
  * Pure. Given a registry entry, its last Status and whether a key is stored, say whether the owner still
- * has something to do, and what. A status we have not got yet (or a `loggedIn` the vendor cannot tell us,
- * like Gemini's) is never reported as a problem: only a definite `false` is.
+ * has something to do, and what. A status we have not got yet (or a `loggedIn` the vendor cannot report,
+ * which is every tool without a status command) is never a complaint: only a definite `false` is.
  *   reason: null | 'not-installed' | 'not-logged-in' | 'no-key'
  *   actions: the buttons the dialog should offer, in order — 'install' | 'login' | 'settings'
  */
@@ -234,18 +347,33 @@ function readiness(provider, status, hasKey) {
 
 // ── the cache ────────────────────────────────────────────────────────────────────────────────────
 const CACHE_MS = 60 * 1000;
+const PROBE_CONCURRENCY = 4;   // eleven CLIs is eleven child processes; four at a time keeps it civil
 let cache = { at: 0, status: null };
+/** Run `fn` over `items`, at most `n` at a time, results in the original order. */
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
+  return out;
+}
 /**
- * Every provider's Status, probes in parallel, cached for a minute. `keyInfo` is `{ id: { setAt } }` from
- * secrets.js (never the key itself). A probe that blows up still yields a Status with `error`.
+ * Every provider's Status, four probes at a time, cached for a minute. `keyInfo` is `{ id: { setAt } }`
+ * from secrets.js (never the key itself). A probe that blows up still yields a Status with `error`.
  */
 async function statusAll({ force = false, keyInfo = {} } = {}) {
   const cli = PROVIDERS.filter((p) => typeof p.status === 'function');
   let probed = cache.status;
   if (force || !probed || Date.now() - cache.at > CACHE_MS) {
-    const results = await Promise.all(cli.map((p) => Promise.resolve()
+    const results = await pool(cli, PROBE_CONCURRENCY, (p) => Promise.resolve()
       .then(() => p.status())
-      .catch((e) => ({ ...NOT_INSTALLED(), detail: 'probe failed', error: String((e && e.message) || e).slice(0, 200) }))));
+      .catch((e) => ({ ...NOT_INSTALLED(), detail: 'probe failed', error: String((e && e.message) || e).slice(0, 200) })));
     probed = {}; cli.forEach((p, i) => { probed[p.id] = { ...results[i], at: Date.now() }; });
     cache = { at: Date.now(), status: probed };
   }
@@ -297,6 +425,6 @@ function installLine(id) { const p = byId(id); return p ? (p.install || null) : 
 module.exports = {
   PROVIDERS, list, byId, statusAll, invalidate, keyStatus, readiness,
   assembleEnv, isEnabled, loginLine, installLine,
-  parseVersion, parseClaudeStatus, parseGhStatus, parseCodexLogin,
-  which, codexFromChatGptApp, run, cleanEnv, CACHE_MS,
+  parseVersion, parseClaudeStatus, parseGhStatus, parseCodexLogin, isCursorAgent,
+  which, codexFromChatGptApp, run, cleanEnv, versionProbe, pool, CACHE_MS, PROBE_CONCURRENCY,
 };
