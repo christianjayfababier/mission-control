@@ -117,6 +117,14 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .ph-repo .team { border-radius: 999px; padding: 0 8px; font-weight: 600; }
 .ph-repo .team.free { background: #12301c; color: var(--green); }
 .ph-repo .team.busy { background: #3a2a10; color: var(--amber); }
+/* auto-update chip in the project header (T-022): hidden unless a check, a download or a ready
+   update is on; only the ready one is clickable. */
+.update-chip { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; font-size: 12px; font-weight: 600; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-3); color: var(--muted); font-family: inherit; cursor: default; }
+.update-chip.ready { border-color: #2c5a35; background: #12301c; color: var(--green); cursor: pointer; }
+.update-chip.ready:hover { border-color: var(--green); }
+.update-chip.ready.busy { border-color: #5a4520; background: #3a2a10; color: var(--amber); }
+.update-chip.working { color: var(--accent); }
+.update-note { font-size: 11px; color: var(--amber); max-width: 240px; }
 .note-src { margin-left: auto; flex: none; white-space: nowrap; }
 .note-title.link { cursor: pointer; } .note-title.link:hover { color: var(--accent); }
 
