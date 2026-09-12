@@ -109,3 +109,13 @@ Deviations from the sections above, accepted at review; T-020 codes against this
 - The per-project provider checklist is its own header button **AI** (`#dlg-ai`), not part of Repo & account.
 - Screenshot views: `--view settings` (alias `accounts`), `settings-rules`, `settings-hidden`, `settings-about`, `ai`.
 - Rule for later features: machine-wide goes into a Settings section, per-project goes into the project header.
+
+## Registry as shipped (2026-09-12, after the owner asked for the ten most-used tools)
+
+- **CLI tools (11):** Claude Code, GitHub CLI (both `required`), then OpenAI Codex CLI, Google Gemini CLI, GitHub Copilot CLI, Cursor CLI (bin `agent`, accepted only when its version line mentions cursor or agent), Cline CLI, OpenCode, Aider, Goose, Ollama. Commands come from vendor docs verified on 2026-09-12 (memory note `ai-provider-facts`); only Claude Code's and Codex's `exec` were run on this machine. Goose has no verified install, login or exec line and shows detection only.
+- **API keys (8):** Anthropic, OpenAI, Google Gemini, xAI, Mistral, DeepSeek, OpenRouter, Cursor. Aider, Cline, Goose and OpenCode reuse these; Ollama needs none; Copilot rides the GitHub account (`GITHUB_TOKEN`, informational only, the per-project `GH_TOKEN` is unchanged).
+- **Probe policy:** `<bin> --version` (fallback `-v`) for detection; `loggedIn` only for tools with a documented status command (Claude Code, GitHub CLI, Codex), `null` otherwise, so those tools never ask for a login. Concurrency 4, 5 s timeout for the new tools, 60 s cache; a full round takes about 2 s here.
+- **Optional fields:** `exec` (one-shot template with `{prompt}`, Ollama also `{model}`), `keys` (env vars the tool reads), `blurb`. Nothing reads `exec` or `keys` yet; they exist for the multi-AI collaboration design.
+- **Readiness:** `readiness(provider, status, hasKey)` → `{ ready, reason, actions }`; not-installed wins over not-logged-in; a project toggle turned on for a provider that is not ready shows an amber callout with Install / Log in / Open Settings.
+- **Filter:** the Settings list filters on name, id, bin, env var, blurb and `keys`.
+- **Screenshot timing:** `--view` retries every 500 ms for up to 6 s until a project is selected; the 19-row AI dialog needs `--wait 12000` on a loaded machine.
