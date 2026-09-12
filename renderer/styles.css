@@ -446,6 +446,51 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .ex-mi:hover { background: #223049; }
 .ex-err { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* ── team chat (docs/TEAM-CHAT-CONTRACT.md): the AI colleagues' panel, next to the Explorer.
+   The grid gains a column per open panel; with both open the chat sits closest to the work. */
+#app.chat-open { grid-template-columns: 300px 320px 1fr; }
+#app.explorer-open.chat-open { grid-template-columns: 300px 280px 320px 1fr; }
+.chat { background: var(--bg-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100vh; }
+.ch-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.ch-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.ch-name { font-weight: 700; font-size: 13px; }
+.ch-tag { font-size: 10px; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-switch { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); cursor: pointer; flex: none; }
+.ch-switch input { accent-color: var(--accent); cursor: pointer; }
+.ch-roster { display: flex; flex-wrap: wrap; gap: 5px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.ch-chip { display: flex; align-items: center; gap: 5px; padding: 2px 8px 2px 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); cursor: pointer; max-width: 100%; }
+.ch-chip:hover { border-color: #3d4a5e; background: var(--bg-3); }
+.ch-chip.muted-agent, .ch-chip.notready { opacity: .55; }
+.ch-chip-av { width: 18px; height: 18px; border-radius: 50%; flex: none; }
+.ch-chip-name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-chip-tag { font-size: 9px; color: var(--muted); border-left: 1px solid var(--line); padding-left: 5px; white-space: nowrap; }
+.ch-add { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px dashed var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.ch-add:hover { border-color: var(--accent); color: var(--accent); }
+.ch-note { padding: 6px 10px; font-size: 11px; color: var(--amber); border-bottom: 1px solid var(--line); line-height: 1.45; }
+.ch-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.ch-msg-empty { color: var(--muted); font-size: 12px; line-height: 1.55; padding: 10px 2px; }
+.ch-day { text-align: center; font-size: 10px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; margin: 2px 0; }
+/* "X joined the chat" is a room event, not a turn: centred, dim, and the time flows with the sentence */
+.ch-system { font-size: 11px; color: var(--muted); font-style: italic; text-align: center; line-height: 1.5; padding: 0 6px; }
+.ch-system .ch-time { margin-left: 6px; }
+.ch-msg { display: flex; gap: 8px; align-items: flex-start; }
+.ch-av { width: 26px; height: 26px; border-radius: 50%; flex: none; margin-top: 1px; }
+.ch-msg-main { min-width: 0; flex: 1; }
+.ch-msg-head { display: flex; align-items: baseline; gap: 6px; }
+.ch-who { font-weight: 700; font-size: 12px; }
+.ch-time { font-size: 10px; color: var(--muted); font-family: var(--mono); flex: none; }
+.ch-kind { font-size: 9px; padding: 0 5px; border-radius: 999px; background: var(--bg-3); color: var(--muted); }
+.ch-kind.joke { color: var(--magenta); background: #2a1f45; }
+.ch-kind.sugg { color: var(--amber); background: #3a2a10; }
+.ch-text { font-size: 12px; line-height: 1.5; margin-top: 2px; overflow-wrap: anywhere; }
+/* a suggestion is the only thing the human ever acts on, so it gets the AI Collaboration callout's amber edge */
+.ch-msg.suggestion .ch-msg-main { border-left: 3px solid var(--amber); border-radius: 0 7px 7px 0; background: rgba(210, 153, 34, .08); padding: 5px 8px 7px 9px; }
+.ch-actions { margin-top: 6px; }
+.ch-foot { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-top: 1px solid var(--line); }
+.ch-count { font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-spacer { flex: 1; }
+.btn.danger { border-color: var(--red); color: var(--red); }
+
 /* Accounts & AI dialog (docs/ACCOUNTS-CONTRACT.md) — same shape as the team dialog: a scrolling list of
    rows inside a wide <dialog>. `display` is scoped to [open]; a bare .dlg.wide rule would keep it visible. */
 .acct-actions { display: flex; gap: 10px; align-items: center; }

@@ -92,6 +92,23 @@ window.MC = {
   },
   /** Give a pty the main process already spawned a tab in this project (the clone terminal). */
   attachTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title }),
+  /** Put text in the lead's composer and focus it, WITHOUT sending: the human still presses Send.
+      The team chat's "Send to lead" uses this (docs/TEAM-CHAT-CONTRACT.md). False when there is no
+      composer to paste into, which means the lead session is not hosted in Mission Control. */
+  pasteToLead(text) {
+    const p = currentProject(); if (!p || !text) return false;
+    const sid = state.lead.get(p.key);
+    const hosted = sid && hostOf(sid) && p.sessions.some((s) => s.id === sid);
+    if (hosted) activateTab('lead');
+    let ta = null;
+    if (hosted) { const pane = state.panes.get('session:' + sid); ta = pane && pane.foot ? pane.foot.querySelector('textarea.composer') : null; }
+    if (!ta) ta = $('#orch-body .pane.active textarea.composer');
+    if (!ta) return false;
+    ta.value = ta.value.trim() ? ta.value.replace(/\s+$/, '') + '\n\n' + text : text;
+    ta.dispatchEvent(new Event('input'));
+    ta.focus(); try { ta.selectionStart = ta.selectionEnd = ta.value.length; } catch { /* ignore */ }
+    return true;
+  },
   /** Type a message into the project's lead session (or any Claude session hosted here). Returns the terminal title, or null. */
   sendToLead(p, msg) {
     let host = null; const lead = state.lead.get(p.key); if (lead) host = hostOf(lead);
@@ -108,6 +125,7 @@ function selectProject(key) {
   $('#ph-path').textContent = p ? (p.path || '') : '';
   renderHeader(p); renderPrStrip(p);
   if (window.Explorer) window.Explorer.render(p, state.snapshot);   // files/branches panel follows the selection
+  if (window.Chat) window.Chat.render(p);                           // the team chat panel does too
   // show this project's panes, hide the others
   for (const [k, list] of state.terms) for (const t of list) t.el.classList.toggle('active', false);
   renderTabs();
@@ -867,6 +885,8 @@ window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performanc
     if (env.startView === 'accounts') { if (window.Settings) window.Settings.open('accounts'); return; }
     // --view ai opens this project's provider checklist
     if (env.startView === 'ai') { if (window.Accounts) window.Accounts.openAi(); return; }
+    // --view chat opens the team chat panel (with MC_CHAT_FIXTURE, on a fixture chat instead of the store)
+    if (env.startView === 'chat') { if (window.Chat) window.Chat.openFromStartView(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
@@ -875,6 +895,7 @@ window.mc.onSnapshot((snap) => {
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
   if (window.Explorer) window.Explorer.render(p, snap);
+  if (window.Chat) window.Chat.render(p);
   if (p) {
     $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs();
     const tw = performance.now(); renderWorkers(); if (perf.workers == null) { perf.workers = performance.now() - tw; perf.workerCount = (p.workers || []).length; }
