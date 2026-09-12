@@ -10,6 +10,8 @@ const prov = require('../providers.js');
 const { Secrets } = require('../secrets.js');
 const gset = require('../globalsettings.js');
 const np = require('../newproject-lib.js');
+const { UpdaterState } = require('../updater.js');
+const { checkVersion } = require('../build/check-version.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -652,6 +654,110 @@ check('target folder: the parent must be there and the folder must not', () => {
     assert.match(bad.error, /path separator/);
     assert.equal(fs.existsSync(path.join(tmp, 'no')), false);
   });
+
+
+// ── auto-update (T-022): the state machine only, no Electron and no network. `start()` in updater.js
+// does nothing but wire electron-updater's events to these transitions, so covering them covers it.
+const mkUpdater = (opts = {}) => { const pushed = []; const u = new UpdaterState({ current: '0.2.0', packaged: true, log: () => {}, onChange: (s) => pushed.push(s), ...opts }); return { u, pushed }; };
+
+check('updater: a packaged app starts idle and a dev run starts disabled with a reason', () => {
+  assert.equal(mkUpdater().u.snapshot().state, 'idle');
+  const dev = mkUpdater({ packaged: false }).u.snapshot();
+  assert.equal(dev.state, 'disabled'); assert.equal(dev.reason, 'not packaged'); assert.equal(dev.canInstall, false);
+});
+check('updater: the whole happy path, one push per transition', () => {
+  const { u, pushed } = mkUpdater();
+  assert.equal(u.checking().state, 'checking');
+  assert.equal(u.available('0.3.0').version, '0.3.0');
+  assert.equal(u.progress(41.6).state, 'downloading');
+  assert.equal(u.snapshot().percent, 42);                      // rounded, so the chip never shows 41.6%
+  const ready = u.downloaded('0.3.0');
+  assert.equal(ready.state, 'ready'); assert.equal(ready.percent, 100); assert.equal(ready.canInstall, true);
+  assert.equal(pushed.length, 4);
+  assert.ok(ready.checkedAt > 0);
+});
+check('updater: a check that finds nothing goes back to idle and forgets the old version', () => {
+  const { u } = mkUpdater();
+  u.checking(); u.available('0.3.0'); u.notAvailable();
+  const s = u.snapshot();
+  assert.equal(s.state, 'idle'); assert.equal(s.version, null); assert.ok(s.checkedAt > 0);
+});
+check('updater: an error carries its message, the same one twice is one push, and the next check clears it', () => {
+  const { u, pushed } = mkUpdater();
+  u.checking(); u.failed(new Error('No published versions on GitHub'));
+  assert.equal(u.snapshot().state, 'error');
+  assert.match(u.snapshot().error, /No published versions/);
+  u.failed(new Error('No published versions on GitHub'));   // the event and the rejected promise, one failure
+  assert.equal(pushed.length, 2);
+  u.failed('something else');
+  assert.equal(pushed.length, 3);
+  assert.equal(u.checking().error, null);
+});
+check('updater: percent is clamped, and a bad state name is a programming error', () => {
+  const { u } = mkUpdater();
+  assert.equal(u.progress(-5).percent, 0);
+  assert.equal(u.progress(1000).percent, 100);
+  assert.equal(u.progress(undefined).percent, 0);
+  assert.throws(() => u.to('nonsense'), /unknown updater state/);
+});
+check('updater: nothing moves once it is disabled — a dev run can never offer a restart', () => {
+  const { u, pushed } = mkUpdater({ packaged: false });
+  u.checking(); u.available('0.3.0'); u.downloaded('0.3.0');
+  assert.equal(u.snapshot().state, 'disabled');
+  assert.equal(pushed.length, 0);
+  assert.match(u.installBlocker(), /updates are disabled: not packaged/);
+});
+check('updater: busy blocks the install, and only while it is busy', () => {
+  let busy = true;
+  const { u } = mkUpdater({ isBusy: () => busy });
+  u.checking(); u.available('0.3.0'); u.downloaded('0.3.0');
+  assert.equal(u.snapshot().busy, true);
+  assert.equal(u.snapshot().canInstall, false);
+  assert.equal(u.installBlocker(), 'sessions are running');    // the exact text main.js returns to the renderer
+  busy = false;
+  assert.equal(u.installBlocker(), null);
+  assert.equal(u.snapshot().canInstall, true);
+});
+check('updater: install is refused before an update is downloaded, however quiet the machine is', () => {
+  const { u } = mkUpdater();
+  assert.equal(u.installBlocker(), 'no update is ready');
+  u.checking(); u.available('0.3.0');
+  assert.equal(u.installBlocker(), 'no update is ready');      // available is not downloaded
+  u.progress(99);
+  assert.equal(u.installBlocker(), 'no update is ready');
+});
+
+check('every module main.js and preload.js require must be in build.files, or the installed app dies on boot', () => {
+  // PR #10 and #11 added providers.js, secrets.js, globalsettings.js and newproject-lib.js and never
+  // added them to the electron-builder file list. `npm run dist` was happy; the packaged app threw
+  // "Cannot find module ./providers" at the first require and never drew a window. Never again.
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const listed = new Set(pkg.build.files.filter((f) => !f.startsWith('!')));
+  const needed = new Set();
+  for (const src of ['main.js', 'preload.js']) {
+    for (const m of fs.readFileSync(path.join(root, src), 'utf8').matchAll(/require\('\.\/([\w-]+)'\)/g)) needed.add(m[1] + '.js');
+  }
+  const missing = [...needed].filter((f) => !listed.has(f));
+  assert.deepEqual(missing, [], 'not packaged: ' + missing.join(', '));
+  for (const f of needed) assert.equal(fs.existsSync(path.join(root, f)), true, f + ' is required but not in the repo');
+});
+
+// ── the release guard the workflow runs before it builds (build/check-version.js)
+check('version guard: the tag must be vX.Y.Z and must name the version in package.json', () => {
+  assert.deepEqual(checkVersion('v0.2.0', '0.2.0'), { ok: true, version: '0.2.0' });
+  assert.match(checkVersion('v0.3.0', '0.2.0').message, /does not match package.json version "0.2.0"/);
+  assert.match(checkVersion('v0.3.0', '0.2.0').message, /"version": "0.3.0"/);   // it says what to fix
+  assert.match(checkVersion('0.2.0', '0.2.0').message, /not of the form vX.Y.Z/);
+  assert.match(checkVersion('release-0.2.0', '0.2.0').message, /not of the form vX.Y.Z/);
+  assert.match(checkVersion('', '0.2.0').message, /only runs on a pushed tag/);
+  assert.match(checkVersion('v0.2.0', '').message, /no version field/);
+  assert.equal(checkVersion(' v0.2.0 ', ' 0.2.0 ').ok, true);                    // a CI variable may carry whitespace
+});
+check('version guard: this repo is tagged and versioned consistently right now', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(checkVersion('v' + pkg.version, pkg.version).ok, true);
+});
 
 (async () => {
   for (const [title, fn] of asyncChecks) { await fn(); n++; console.log('  ok  ' + title); }
