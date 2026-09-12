@@ -81,6 +81,16 @@ window.MC = {
   activateTab: (id) => activateTab(id),
   /** Show a pty the main process created (a provider login or install) as a terminal tab of this project. */
   adoptTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title, activate: true }),
+  /** Select the project with this path as soon as a snapshot carries it (a folder that was just added or cloned). */
+  selectPath(p, tries = 24) {
+    const want = String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+    if (!want) return;
+    const hit = (state.snapshot.projects || []).find((x) => String(x.path || '').replace(/[\\/]+$/, '').toLowerCase() === want);
+    if (hit) { selectProject(hit.key); return; }
+    if (tries > 0) setTimeout(() => window.MC.selectPath(p, tries - 1), 250);   // the registry write and the next snapshot race
+  },
+  /** Give a pty the main process already spawned a tab in this project (the clone terminal). */
+  attachTerminal: (p, ptyId, title) => newTerminal(p, { ptyId, title }),
   /** Type a message into the project's lead session (or any Claude session hosted here). Returns the terminal title, or null. */
   sendToLead(p, msg) {
     let host = null; const lead = state.lead.get(p.key); if (lead) host = hostOf(lead);
@@ -169,6 +179,8 @@ function activateTab(id) {
 }
 
 // ───────────── terminals
+// `ptyId` adopts a terminal the main process already spawned (the clone from "+ Add/create a project"),
+// so it gets a tab, a title and a live view like any other; without it the renderer asks for a new pty.
 async function newTerminal(p, { activate = true, ptyId: adopt = null, title = null } = {}) {
   if (!state.env.ptyAvailable) { alert('Terminals are unavailable: ' + (state.env.ptyError || 'node-pty failed to load')); return; }
   if (!state.terms.has(p.key)) state.terms.set(p.key, []); // claim the slot synchronously so a racing snapshot does not open a second terminal
@@ -180,6 +192,7 @@ async function newTerminal(p, { activate = true, ptyId: adopt = null, title = nu
   // `adopt` is a pty main.js already spawned (a provider login or install, docs/ACCOUNTS-CONTRACT.md):
   // it is already running the command, so all this terminal does is attach a view to it.
   const ptyId = adopt || await window.mc.ptyCreate({ cwd: p.path, cols: term.cols, rows: term.rows });
+  if (adopt) window.mc.ptyResize(ptyId, term.cols, term.rows);   // the adopted pty was spawned at a guessed size
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
   const rec = { ptyId, term, fit, el: container, title: title || `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
@@ -481,7 +494,7 @@ function renderWorkers() {
 }
 
 // ───────────── header actions
-$('#btn-add').onclick = () => window.mc.addProject();
+$('#btn-add').onclick = () => (window.NewProject ? window.NewProject.open() : window.mc.addProject());
 $('#btn-term').onclick = () => { const p = currentProject(); if (p) newTerminal(p); };
 $('#btn-claude').onclick = () => { const p = currentProject(); if (p) launchClaude(p); };
 $('#btn-code').onclick = () => { const p = currentProject(); if (p && p.path) window.mc.openInCode(p.path); };
@@ -729,6 +742,8 @@ window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performanc
   if (env.startView) startViewWhenReady(env.startView, () => {
     // --view idle expands the sidebar's Idle group, which is collapsed by default (not persisted: a flag, not a preference)
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
+    // --view new-project opens Add/create a project on its New folder mode
+    if (env.startView === 'new-project') { if (window.NewProject) window.NewProject.open('new'); return; }
     const p = currentProject(); if (!p) return;
     // --view explorer opens the Explorer panel; --view explorer-branches opens it on the Branches tab
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }

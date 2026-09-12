@@ -20,6 +20,7 @@ const team = require('./team');
 const providers = require('./providers');
 const globalsettings = require('./globalsettings');
 const { Secrets, electronEncryptor } = require('./secrets');
+const newproject = require('./newproject-lib');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -417,15 +418,52 @@ ipcMain.on('view:ready', (_e, m = {}) => {
 });
 
 // ── project registry
+/** Pin a folder as a project. The one path all three ways in share: the folder picker, "New folder" and a finished clone. */
+function addProjectPath(p) {
+  const reg = registry(); const next = newproject.addToRegistry(reg, p);
+  if (next.length !== reg.length) writeJson(REGISTRY, next);
+  unhideProject(p); // re-adding a folder undoes a "Hide"
+  sendSnapshot();
+  return String(p);
+}
 ipcMain.handle('projects:add', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Add a project folder', properties: ['openDirectory'] });
   if (r.canceled || !r.filePaths[0]) return null;
-  const p = r.filePaths[0];
-  const reg = registry();
-  if (!reg.some((x) => x.path.toLowerCase() === p.toLowerCase())) { reg.push({ path: p, name: path.basename(p), addedAt: new Date().toISOString() }); writeJson(REGISTRY, reg); }
-  unhideProject(p); // re-adding a folder undoes a "Hide"
-  sendSnapshot();
-  return p;
+  return addProjectPath(r.filePaths[0]);
+});
+/** Parent-folder picker for the New folder and From GitHub modes. The path, or null when cancelled. */
+ipcMain.handle('dialog:pickFolder', async (_e, { title } = {}) => {
+  try {
+    const r = await dialog.showOpenDialog(win, { title: title || 'Choose a parent folder', properties: ['openDirectory', 'createDirectory'] });
+    return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+  } catch { return null; }
+});
+/** New folder: mkdir, optional `git init`, optional starter CLAUDE.md, then pin it. Returns { path } or { error }. */
+ipcMain.handle('projects:create', async (_e, { parent, name, git, claudeMd } = {}) => {
+  try {
+    const r = await newproject.createProjectFolder({ parent, name, git: git !== false, claudeMd: claudeMd !== false });
+    if (r.error) return r;
+    addProjectPath(r.path);
+    return { path: r.path };
+  } catch (e) { return { error: String((e && e.message) || e) }; }
+});
+// From GitHub: the clone runs in a real terminal so progress, and any gh prompt, are visible and answerable.
+// The folder is pinned only when that terminal exits 0 and the folder is there (spawnPty's onExit, below).
+const cloning = new Map(); // ptyId -> { path, repo }
+ipcMain.handle('projects:clone', async (_e, { repo, parent, name, account } = {}) => {
+  try {
+    const r = newproject.parseRepoInput(repo);
+    if (!r) return { error: 'That is not a GitHub repository. Use a URL or owner/name.' };
+    const folder = String(name || r.name).trim();
+    const v = newproject.validateTarget(parent, folder);
+    if (v.error) return v;
+    // Same option bag as the accounts branch's spawnPty({ cwd, provider }): a later rename is one word here.
+    const id = await spawnPty({ cwd: parent, account: account || null });
+    cloning.set(id, { path: v.path, repo: r.full });
+    const line = newproject.cloneCommand(r.full, folder);
+    setTimeout(() => { const p = ptys.get(id); if (p) p.proc.write(line + '\r'); }, 500); // let the shell draw its prompt first
+    return { ptyId: id, path: v.path, repo: r.full, cwd: String(parent), command: line };
+  } catch (e) { return { error: String((e && e.message) || e) }; }
 });
 ipcMain.handle('projects:remove', (_e, p) => { writeJson(REGISTRY, registry().filter((x) => x.path.toLowerCase() !== String(p).toLowerCase())); sendSnapshot(); return true; });
 // "Hide" for a project Mission Control only remembers (not pinned): it stays in seen-projects.json but leaves the sidebar
@@ -490,8 +528,13 @@ ipcMain.handle('memory:read', (_e, { path: projectPath, slug }) => {
 ipcMain.handle('open:path', (_e, p) => shell.openPath(p));
 
 // ── terminals (node-pty)
-/** One terminal. `provider` marks a login/install shell so its exit re-probes the accounts (T-019). */
-async function spawnPty({ cwd, cols, rows, shellPath, provider = null } = {}) {
+/**
+ * One project terminal: node-pty plus this project's GitHub account (GH_TOKEN), git identity and the API keys
+ * of the providers it may use. `provider` marks a login/install shell so its exit re-probes the accounts (T-019);
+ * `account` overrides the project's setting, which the clone dialog needs because it picks the account before the
+ * project exists (T-025).
+ */
+async function spawnPty({ cwd, cols, rows, shellPath, provider = null, account: accountOverride } = {}) {
   if (!pty) throw new Error('node-pty unavailable: ' + ptyError);
   const id = 'pty' + (++ptySeq);
   const sh = shellPath || (process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash'));
@@ -500,7 +543,7 @@ async function spawnPty({ cwd, cols, rows, shellPath, provider = null } = {}) {
   // per-project GitHub account and git identity, scoped to this terminal only
   const base = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   const s = settings.get(dir);
-  const account = await effectiveAccount(s, (gitCache.get(keyOf(dir)) || await gitInfo(dir)).remote);
+  const account = accountOverride || await effectiveAccount(s, (gitCache.get(keyOf(dir)) || await gitInfo(dir)).remote);
   if (account) { const t = await github.token(account); if (t) base.GH_TOKEN = t; }
   if (s.gitName) { base.GIT_AUTHOR_NAME = s.gitName; base.GIT_COMMITTER_NAME = s.gitName; }
   if (s.gitEmail) { base.GIT_AUTHOR_EMAIL = s.gitEmail; base.GIT_COMMITTER_EMAIL = s.gitEmail; }
@@ -512,6 +555,13 @@ async function spawnPty({ cwd, cols, rows, shellPath, provider = null } = {}) {
   proc.onData((d) => { if (win && !win.isDestroyed()) win.webContents.send('pty:data', { id, data: d }); });
   proc.onExit(({ exitCode }) => {
     ptys.delete(id);
+    const c = cloning.get(id);
+    if (c) { // a clone terminal: gh's exit code came back as the shell's
+      cloning.delete(id);
+      const ok = exitCode === 0 && fs.existsSync(c.path);
+      if (ok) addProjectPath(c.path);
+      if (win && !win.isDestroyed()) win.webContents.send('project:cloned', { path: c.path, repo: c.repo, ok, exitCode });
+    }
     if (win && !win.isDestroyed()) win.webContents.send('pty:exit', { id, exitCode });
     // a login or install shell just ended: the tool's state has probably changed, so re-probe and push
     if (provider) setTimeout(() => sendProviders(true), 800);

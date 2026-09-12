@@ -9,6 +9,7 @@ const { Rules, renderOwnerRules, readText, sources, localDay } = require('../rul
 const prov = require('../providers.js');
 const { Secrets } = require('../secrets.js');
 const gset = require('../globalsettings.js');
+const np = require('../newproject-lib.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -568,6 +569,89 @@ checkAsync('refreshStatuses reports each provider as it finishes, not once at th
   assert.equal(seen.length, 3);
   assert.ok(seen.includes('broken'), 'a probe that throws still reports');
 });
+
+// ── T-025 · add/create a project: the rules main.js, preload.js and the dialog all share (newproject-lib.js).
+check('project name: a folder name that Windows and the sidebar can both live with', () => {
+  for (const ok of ['my-project', 'App_2', 'a', 'mission-control', 'sales.api']) assert.equal(np.validateProjectName(ok), null, ok);
+  assert.match(np.validateProjectName(''), /Enter a project name/);
+  assert.match(np.validateProjectName('   '), /Enter a project name/);
+  assert.match(np.validateProjectName(' spaced'), /start or end with a space/);
+  assert.match(np.validateProjectName('a/b'), /path separator/);
+  assert.match(np.validateProjectName('a\\b'), /path separator/);
+  assert.match(np.validateProjectName('.hidden'), /start with a dot/);
+  assert.match(np.validateProjectName('trailing.'), /end with a dot/);
+  assert.match(np.validateProjectName('a:b'), /cannot contain/);
+  assert.match(np.validateProjectName('what?'), /cannot contain/);
+  assert.match(np.validateProjectName('CON'), /reserved Windows name/);
+  assert.match(np.validateProjectName('lpt1.txt'), /reserved Windows name/);
+  assert.match(np.validateProjectName('x'.repeat(101)), /too long/);
+  assert.match(np.validateProjectName('a`b'), /backtick or a line break/);
+  assert.match(np.validateProjectName('a\nb'), /backtick or a line break/);
+  assert.equal(np.validateProjectName('a;whoami'), null);   // legal on Windows: the clone command quotes it instead
+});
+check('repository input: a URL, a git@ remote or owner/name — anything else is not a repo', () => {
+  assert.equal(np.parseRepoInput('https://github.com/octocat/Hello-World').full, 'octocat/Hello-World');
+  assert.equal(np.parseRepoInput('https://github.com/octocat/Hello-World.git').full, 'octocat/Hello-World');
+  assert.equal(np.parseRepoInput('https://chris@github.com/octocat/Hello-World/').full, 'octocat/Hello-World');
+  assert.equal(np.parseRepoInput('git@github.com:octocat/Hello-World.git').full, 'octocat/Hello-World');
+  assert.equal(np.parseRepoInput('octocat/Hello-World').url, 'https://github.com/octocat/Hello-World');
+  assert.equal(np.parseRepoInput('  octocat/Hello-World  ').name, 'Hello-World');
+  for (const bad of ['', 'not a repo', 'https://gitlab.com/a/b', 'octocat']) assert.equal(np.parseRepoInput(bad), null, JSON.stringify(bad));
+});
+check('clone command: each argument is one literal, so a folder name cannot smuggle in a second command', () => {
+  const q = (s) => "gh repo clone 'octocat/Hello-World' '" + s + "'; exit $LASTEXITCODE";
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'hello'), q('hello'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'my folder'), q('my folder'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'a;whoami'), q('a;whoami'));      // the whole name stays inside the quotes
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'x$(y)'), q('x$(y)'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', 'a & b'), q('a & b'));
+  assert.equal(np.cloneCommand('octocat/Hello-World', "it's"), q("it''s"));            // PowerShell doubles an embedded quote
+  assert.equal(np.cloneCommand('o/n', 'hello', { powershell: false }), "gh repo clone 'o/n' 'hello'; exit $?");
+  assert.equal(np.cloneCommand('o/n', "it's", { powershell: false }), "gh repo clone 'o/n' 'it'\\''s'; exit $?");   // sh close-escape-reopen
+  assert.equal(np.cloneCommand("o';rm -rf /;'", 'n'), "gh repo clone 'o'';rm -rf /;''' 'n'; exit $LASTEXITCODE");   // the repo argument too
+});
+check('registry entry: added once, whatever the case or the trailing slash (the half of addProjectPath that runs under node)', () => {
+  const at = new Date('2026-09-12T10:00:00.000Z');
+  let reg = np.addToRegistry([], 'C:\\Apps\\Demo', at);
+  assert.deepEqual(reg, [{ path: 'C:\\Apps\\Demo', name: 'Demo', addedAt: '2026-09-12T10:00:00.000Z' }]);
+  assert.equal(np.addToRegistry(reg, 'c:\\apps\\demo\\').length, 1);   // already pinned: Windows paths compare case-insensitively
+  assert.equal(np.addToRegistry(reg, 'C:\\Apps\\Other').length, 2);
+  assert.equal(np.addToRegistry(null, 'C:\\Apps\\Demo').length, 1);      // a missing projects.json is an empty list
+});
+check('starter CLAUDE.md: the project name as the H1, and the line the lead fills in', () => {
+  const md = np.starterClaudeMd('Demo');
+  assert.match(md, /^# Demo\r\n/);
+  assert.match(md, /Rules for Claude sessions in this repo go here\./);
+  assert.equal(md.includes('docs/PLAN.md'), false);
+});
+check('target folder: the parent must be there and the folder must not', () => {
+  assert.match(np.validateTarget('', 'x').error, /Choose a parent folder/);
+  assert.match(np.validateTarget(path.join(tmp, 'nope'), 'x').error, /does not exist/);
+  assert.match(np.validateTarget(tmp, '.x').error, /start with a dot/);
+  assert.equal(np.validateTarget(tmp, 'brand-new').path, path.join(tmp, 'brand-new'));
+  fs.mkdirSync(path.join(tmp, 'taken'));
+  assert.match(np.validateTarget(tmp, 'taken').error, /already exists/);
+  const file = path.join(tmp, 'a-file'); fs.writeFileSync(file, 'x');
+  assert.match(np.validateTarget(file, 'x').error, /not a folder/);
+});
+
+// createProjectFolder touches the disk and shells out to git, so it (and the summary) run in a tail
+// promise: everything above stays synchronous.
+  checkAsync('create a project folder: git init and a starter CLAUDE.md, and no half-made folder on a bad name', async () => {
+    const r = await np.createProjectFolder({ parent: tmp, name: 'made-here', git: true, claudeMd: true });
+    assert.equal(r.error, undefined);
+    assert.equal(r.path, path.join(tmp, 'made-here'));
+    assert.equal(fs.existsSync(path.join(r.path, '.git')), true);
+    assert.match(fs.readFileSync(path.join(r.path, 'CLAUDE.md'), 'utf8'), /^# made-here/);
+    const again = await np.createProjectFolder({ parent: tmp, name: 'made-here' });
+    assert.match(again.error, /already exists/);
+    const plain = await np.createProjectFolder({ parent: tmp, name: 'plain-one', git: false, claudeMd: false });
+    assert.equal(fs.existsSync(path.join(plain.path, '.git')), false);
+    assert.equal(fs.existsSync(path.join(plain.path, 'CLAUDE.md')), false);
+    const bad = await np.createProjectFolder({ parent: tmp, name: 'no/pe' });
+    assert.match(bad.error, /path separator/);
+    assert.equal(fs.existsSync(path.join(tmp, 'no')), false);
+  });
 
 (async () => {
   for (const [title, fn] of asyncChecks) { await fn(); n++; console.log('  ok  ' + title); }
