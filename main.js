@@ -18,6 +18,7 @@ const { PrWatch } = require('./prwatch');
 const explorer = require('./explorer');
 const team = require('./team');
 const providers = require('./providers');
+const globalsettings = require('./globalsettings');
 const { Secrets, electronEncryptor } = require('./secrets');
 
 let pty = null, ptyError = null;
@@ -208,7 +209,7 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron });
     sendSnapshot();
     setTimeout(() => sendProviders(false), 600);   // accounts & AI: first probe round, pushed when it lands
     if (SCREENSHOT) setTimeout(async () => {
@@ -277,6 +278,9 @@ function readerRoots(project) {
   return [KIT_FILE, KIT_LOCAL, path.join(DATA_DIR, 'generated'), ...(project ? [project] : []), ...known];
 }
 ipcMain.handle('rules:read', (_e, arg) => { const p = typeof arg === 'string' ? arg : (arg && arg.path); const project = typeof arg === 'object' && arg ? arg.project : null; return readRuleText(p, readerRoots(project)); });
+// Settings -> Global rules edits exactly one file, the owner's additions to every lead's rulebook. The
+// renderer sends the path it was given in `env`; globalsettings.writeLocalRules refuses anything else.
+ipcMain.handle('rules:writeLocal', (_e, { path: p, text } = {}) => globalsettings.writeLocalRules(p, KIT_LOCAL, text));
 
 // ── repo, GitHub account, git identity per project
 ipcMain.handle('gh:accounts', () => github.listAccounts(true));
@@ -409,6 +413,9 @@ ipcMain.handle('projects:remove', (_e, p) => { writeJson(REGISTRY, registry().fi
 // "Hide" for a project Mission Control only remembers (not pinned): it stays in seen-projects.json but leaves the sidebar
 function unhideProject(p) { const st = seenStore(); const n = st.hidden.filter((x) => norm(x) !== norm(p)); if (n.length !== st.hidden.length) { st.hidden = n; saveSeen(); } }
 ipcMain.handle('projects:hide', (_e, p) => { const st = seenStore(); if (p && !st.hidden.some((x) => norm(x) === norm(p))) { st.hidden.push(String(p)); saveSeen(); } sendSnapshot(); return true; });
+// Settings -> Hidden projects: the list the sidebar is not showing, and the way back into it
+ipcMain.handle('projects:hidden', () => { const st = seenStore(); return globalsettings.hiddenRows(st.hidden, st.projects); });
+ipcMain.handle('projects:unhide', (_e, p) => { const st = seenStore(); const next = globalsettings.unhide(st.hidden, p); if (next !== st.hidden) { st.hidden = next; saveSeen(); sendSnapshot(); } return globalsettings.hiddenRows(st.hidden, st.projects); });
 ipcMain.handle('open:code', (_e, p) => { try { spawn('cmd.exe', ['/c', 'code', p], { detached: true, stdio: 'ignore', windowsHide: true }).unref(); return true; } catch (e) { return String(e); } });
 ipcMain.handle('open:folder', (_e, p) => shell.openPath(p));
 

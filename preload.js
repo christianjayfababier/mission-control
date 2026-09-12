@@ -59,6 +59,10 @@ contextBridge.exposeInMainWorld('mc', {
   secretSet: (id, value) => ipcRenderer.invoke('secrets:set', { id, value }),
   secretRemove: (id) => ipcRenderer.invoke('secrets:remove', { id }),
   onProviders: on('providers'),
+  // the global Settings dialog (the cog in the sidebar): the owner's rulebook additions and hidden projects
+  writeLocalRules: (absPath, text) => ipcRenderer.invoke('rules:writeLocal', { path: absPath, text }),
+  hiddenProjects: () => ipcRenderer.invoke('projects:hidden'),
+  unhideProject: (p) => ipcRenderer.invoke('projects:unhide', p),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
   leadPrepare: (p, name) => ipcRenderer.invoke('lead:prepare', { path: p, name }),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
