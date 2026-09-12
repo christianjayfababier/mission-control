@@ -8,6 +8,7 @@ const { relTo } = require('../transcripts.js');
 const { Rules, renderOwnerRules, readText, sources, localDay } = require('../rules.js');
 const prov = require('../providers.js');
 const { Secrets } = require('../secrets.js');
+const gset = require('../globalsettings.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -335,6 +336,55 @@ check('a missing binary is "not installed", not an exception, and a stored key r
   assert.equal(empty.installed, false); assert.equal(empty.detail, 'no key stored');
   const set = prov.keyStatus({ setAt: '2026-09-12T08:00:00.000Z' });
   assert.equal(set.installed, true); assert.equal(set.detail, 'key stored 2026-09-12');
+});
+
+
+// -- the global Settings dialog (the cog in the sidebar): the two things it writes
+check('rules:writeLocal writes the owner rulebook and refuses every other path', () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'gs-'));
+  const allowed = path.join(dir, 'orchestrator-system.local.md');
+  const neighbour = path.join(dir, 'orchestrator-system.md');       // the shipped file, one letter away
+  fs.writeFileSync(neighbour, 'the shipped rules');
+
+  const ok = gset.writeLocalRules(allowed, allowed, '# mine\nAlways branch.\n');
+  assert.equal(ok.ok, true); assert.equal(ok.bytes, Buffer.byteLength('# mine\nAlways branch.\n'));
+  assert.equal(fs.readFileSync(allowed, 'utf8'), '# mine\nAlways branch.\n');
+
+  // the same file spelled differently is still the same file
+  const odd = allowed.replace(/([\\/])([^\\/]+)$/, '$1.$1$2');       // .../x/./orchestrator-system.local.md
+  assert.equal(gset.writeLocalRules(odd, allowed, 'via a dotted path').ok, true);
+  assert.equal(gset.writeLocalRules(allowed.toUpperCase(), allowed, 'via upper case').ok, true);
+
+  // anything else is refused, and nothing is written
+  for (const bad of [neighbour, path.join(dir, 'secrets.json'), path.join(dir, '..', 'anything.md'), path.join(dir, 'sub', 'other.md'), '', null]) {
+    const r = gset.writeLocalRules(bad, allowed, 'should never land');
+    assert.ok(r.error, 'expected a refusal for ' + bad);
+    assert.equal(r.ok, undefined);
+  }
+  assert.equal(fs.readFileSync(neighbour, 'utf8'), 'the shipped rules');      // untouched
+  assert.equal(fs.existsSync(path.join(dir, 'secrets.json')), false);
+  assert.equal(fs.readFileSync(allowed, 'utf8'), 'via upper case');           // only our writes landed
+
+  // and a rulebook nobody could have typed is refused too
+  assert.match(gset.writeLocalRules(allowed, allowed, 'x'.repeat(gset.MAX_LOCAL_RULES + 1)).error, /capped at/);
+  assert.equal(fs.readFileSync(allowed, 'utf8'), 'via upper case');
+});
+
+check('unhide: drops one project whatever its spelling, and leaves the list alone when it is not there', () => {
+  const hidden = ['C:\\Apps\\One', 'C:\\Apps\\Two\\', 'C:\\Apps\\Three'];
+  const next = gset.unhide(hidden, 'c:/apps/two');            // other case, other slashes, no trailing one
+  assert.deepEqual(next, ['C:\\Apps\\One', 'C:\\Apps\\Three']);
+  assert.equal(gset.unhide(hidden, 'C:\\Apps\\Nope'), hidden);   // same array back: nothing to save
+  assert.equal(gset.unhide(hidden, ''), hidden);
+  assert.deepEqual(gset.unhide([], 'C:\\Apps\\One'), []);
+  assert.deepEqual(gset.unhide(undefined, 'C:\\Apps\\One'), []);
+
+  // the rows the dialog draws: the remembered name when we have one, else the folder name
+  const rows = gset.hiddenRows(['C:\\Apps\\One', 'C:\\Apps\\Three'], [{ path: 'c:\\apps\\one\\', name: 'Renamed One', lastSeen: '2026-09-10T10:00:00.000Z' }]);
+  assert.deepEqual(rows.map((r) => r.name), ['Renamed One', 'Three']);
+  assert.equal(rows[0].lastSeen, '2026-09-10T10:00:00.000Z');
+  assert.equal(rows[1].lastSeen, null);
+  assert.deepEqual(gset.hiddenRows([], []), []);
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });
