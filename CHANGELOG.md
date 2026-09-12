@@ -8,6 +8,14 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+### Fixed
+
+- The update chip no longer refuses to restart because a terminal is open anywhere in Mission Control.
+  Busy now means a worker is mid-task; terminals are counted, not a blocker (quitting kills them anyway
+  and a Claude session resumes). Clicking the ready chip opens a confirmation that says what the
+  restart costs — how many terminals close, how many workers are still running — with **Restart anyway**
+  available while workers run, and the counts stay fresh as terminals open and close (T-028).
+
 ## 0.2.1 - 2026-09-13
 
 ### Added
