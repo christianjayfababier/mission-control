@@ -175,14 +175,20 @@ const quote = (s) => (/[\s"&|<>^]/.test(String(s)) ? '"' + String(s).replace(/"/
 /** PATH lookup that understands PATHEXT, so `claude` resolves to `...\npm\claude.cmd`. Null when absent.
     The extensions come first on Windows on purpose: npm drops both `claude` (a bash script Windows cannot
     run) and `claude.cmd` in the same directory, and only the second one starts. */
+const whichCache = new Map();
 function which(bin) {
   if (!bin) return null;
   if (bin.includes('/') || bin.includes('\\')) return fileOrNull(bin);
+  if (whichCache.has(bin)) return whichCache.get(bin);
   const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
   const exts = isWin ? [...String(process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''] : [''];
-  for (const d of dirs) for (const e of exts) { const f = fileOrNull(path.join(d, bin + e)); if (f) return f; }
-  return null;
+  let hit = null;
+  outer: for (const d of dirs) for (const e of exts) { const f = fileOrNull(path.join(d, bin + e)); if (f) { hit = f; break outer; } }
+  whichCache.set(bin, hit);
+  return hit;
 }
+/** Forget where the binaries are: a refresh after an install has to find the new one. */
+function forgetPaths() { whichCache.clear(); }
 function fileOrNull(f) { try { return fs.statSync(f).isFile() ? f : null; } catch { return null; } }
 /** execFile, but a .cmd/.bat shim goes through cmd.exe (CreateProcess cannot start one). Never rejects. */
 function run(file, args = [], opts = {}) {
@@ -249,6 +255,7 @@ function parseCodexLogin(out, ok) {
 function isCursorAgent(out) { return /cursor|agent/i.test(String(out || '')); }
 
 // ── probes (each returns a Status; none of them throws) ──────────────────────────────────────────
+const CLAUDE_TIMEOUT = 10000;   // the nested-session guard makes this the slowest probe; 10 s is the cap
 const NOT_INSTALLED = (extra) => ({ installed: false, version: null, loggedIn: null, account: null, detail: 'not installed', ...extra });
 
 /**
@@ -275,9 +282,9 @@ async function probeClaude() {
   const bin = which('claude');
   if (!bin) return NOT_INSTALLED();
   const env = cleanEnv();
-  const v = await run(bin, ['--version'], { timeout: 15000, env });
+  const v = await run(bin, ['--version'], { timeout: CLAUDE_TIMEOUT, env });
   if (!v.ok && !parseVersion(v.stdout)) return NOT_INSTALLED({ detail: 'found on PATH but it did not answer --version' });
-  const st = await run(bin, ['auth', 'status'], { timeout: 15000, env });
+  const st = await run(bin, ['auth', 'status'], { timeout: CLAUDE_TIMEOUT, env });
   const parsed = parseClaudeStatus(st.stdout + st.stderr);
   return { installed: true, version: parseVersion(v.stdout), path: bin, ...parsed, detail: parsed.detail || (st.ok ? 'installed' : 'installed, login state unknown') };
 }
@@ -340,6 +347,7 @@ function readiness(provider, status, hasKey) {
     return hasKey ? { ready: true, reason: null, actions: [] } : { ready: false, reason: 'no-key', actions: ['settings'] };
   }
   const st = status || {};
+  if (st.checking) return { ready: true, reason: null, actions: [] };      // the probe has not answered yet
   if (st.installed === false) return { ready: false, reason: 'not-installed', actions: p.install ? ['install'] : [] };
   if (st.loggedIn === false) return { ready: false, reason: 'not-logged-in', actions: p.login ? ['login'] : [] };
   return { ready: true, reason: null, actions: [] };
@@ -363,25 +371,60 @@ async function pool(items, n, fn) {
   await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
   return out;
 }
+/** What a provider looks like before its probe has answered. The dialogs draw the row anyway. */
+const CHECKING = () => ({ checking: true, installed: null, version: null, loggedIn: null, account: null, detail: 'checking\u2026', at: 0 });
+
 /**
- * Every provider's Status, four probes at a time, cached for a minute. `keyInfo` is `{ id: { setAt } }`
- * from secrets.js (never the key itself). A probe that blows up still yields a Status with `error`.
+ * Pure: the status map a dialog can draw right now. A cached entry wins; a provider nobody has probed yet
+ * is `checking`, never missing — the row exists from the first paint and fills in later. Key providers are
+ * answered from `keyInfo` alone, since there is nothing to probe.
  */
-async function statusAll({ force = false, keyInfo = {} } = {}) {
-  const cli = PROVIDERS.filter((p) => typeof p.status === 'function');
-  let probed = cache.status;
-  if (force || !probed || Date.now() - cache.at > CACHE_MS) {
-    const results = await pool(cli, PROBE_CONCURRENCY, (p) => Promise.resolve()
-      .then(() => p.status())
-      .catch((e) => ({ ...NOT_INSTALLED(), detail: 'probe failed', error: String((e && e.message) || e).slice(0, 200) })));
-    probed = {}; cli.forEach((p, i) => { probed[p.id] = { ...results[i], at: Date.now() }; });
-    cache = { at: Date.now(), status: probed };
+function mergeStatus(providersList, cached, keyInfo = {}) {
+  const out = {};
+  for (const p of providersList || []) {
+    if (p.kind === 'key') { out[p.id] = keyStatus(keyInfo[p.id]); continue; }
+    const hit = cached && cached[p.id];
+    out[p.id] = hit ? { ...hit } : CHECKING();
   }
-  const out = { ...probed };
-  for (const p of PROVIDERS) if (p.kind === 'key') out[p.id] = keyStatus(keyInfo[p.id]);
   return out;
 }
-function invalidate() { cache = { at: 0, status: null }; }
+/** Merge one push of partial results into a status map, leaving every other row exactly as it was. */
+function applyStatusPatch(prev, patch) { return { ...(prev || {}), ...(patch || {}) }; }
+/** The status map as it stands this instant. Never awaits, never probes. */
+function cachedStatus(keyInfo = {}) { return mergeStatus(PROVIDERS, cache.status, keyInfo); }
+
+/**
+ * Run the probes that are missing or stale, four at a time, reporting each one the moment it lands through
+ * `onResult(id, status)` — so a slow probe delays nobody but itself. Resolves when the round is done.
+ */
+async function refreshStatuses({ force = false, onResult = null } = {}) {
+  const cli = PROVIDERS.filter((p) => typeof p.status === 'function');
+  if (force) { cache = { at: 0, status: {} }; forgetPaths(); }   // everything goes back to `checking`
+  if (!cache.status) cache.status = {};
+  const stale = Date.now() - cache.at > CACHE_MS;
+  const todo = cli.filter((p) => force || stale || !cache.status[p.id]);
+  if (!todo.length) return cache.status;
+  cache.at = Date.now();
+  await pool(todo, PROBE_CONCURRENCY, async (p) => {
+    let st;
+    try { st = await p.status(); }
+    catch (e) { st = { ...NOT_INSTALLED(), detail: 'probe failed', error: String((e && e.message) || e).slice(0, 200) }; }
+    st = { ...st, at: Date.now() };
+    cache.status[p.id] = st;
+    if (onResult) { try { onResult(p.id, st); } catch { /* a listener must not break the round */ } }
+    return st;
+  });
+  return cache.status;
+}
+/**
+ * Every provider's Status, waiting for the round to finish. Only for callers that genuinely need an answer
+ * (a login, which wants the binary's real path); the dialogs use cachedStatus() and the pushes instead.
+ */
+async function statusAll({ force = false, keyInfo = {} } = {}) {
+  await refreshStatuses({ force });
+  return mergeStatus(PROVIDERS, cache.status, keyInfo);
+}
+function invalidate() { cache = { at: 0, status: null }; forgetPaths(); }
 
 // ── enablement + environment (pure) ──────────────────────────────────────────────────────────────
 /** Is provider `id` allowed in this project? Project setting wins, then the global default, then yes. */
@@ -424,7 +467,8 @@ function installLine(id) { const p = byId(id); return p ? (p.install || null) : 
 
 module.exports = {
   PROVIDERS, list, byId, statusAll, invalidate, keyStatus, readiness,
+  mergeStatus, applyStatusPatch, cachedStatus, refreshStatuses, CHECKING,
   assembleEnv, isEnabled, loginLine, installLine,
   parseVersion, parseClaudeStatus, parseGhStatus, parseCodexLogin, isCursorAgent,
-  which, codexFromChatGptApp, run, cleanEnv, versionProbe, pool, CACHE_MS, PROBE_CONCURRENCY,
+  which, forgetPaths, codexFromChatGptApp, run, cleanEnv, versionProbe, pool, CACHE_MS, PROBE_CONCURRENCY,
 };

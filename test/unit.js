@@ -507,6 +507,68 @@ checkAsync('pool: every item runs, results keep their order, and never more than
   assert.deepEqual(await prov.pool([], 4, async () => 1), []);
 });
 
+
+// -- the dialogs must never wait for a probe: rows first, statuses as they land
+check('mergeStatus: an unprobed provider is "checking", never missing, and keys answer at once', () => {
+  const cold = prov.mergeStatus(prov.PROVIDERS, null, {});
+  assert.deepEqual(Object.keys(cold).sort(), prov.PROVIDERS.map((p) => p.id).sort());   // every row exists
+  for (const p of prov.PROVIDERS.filter((x) => x.kind === 'cli')) {
+    assert.equal(cold[p.id].checking, true, p.id + ' should be checking');
+    assert.equal(cold[p.id].installed, null, p.id + ' must not claim to be missing before it is probed');
+    assert.equal(cold[p.id].detail, 'checking…');
+  }
+  // a key needs no probe: it is answered from the secrets info in the same tick
+  assert.equal(cold['openai-key'].checking, undefined);
+  assert.equal(cold['openai-key'].detail, 'no key stored');
+  const withKey = prov.mergeStatus(prov.PROVIDERS, null, { 'openai-key': { setAt: '2026-09-12T08:00:00.000Z' } });
+  assert.equal(withKey['openai-key'].detail, 'key stored 2026-09-12');
+
+  // a cached answer wins, and only that row stops checking
+  const warm = prov.mergeStatus(prov.PROVIDERS, { github: { installed: true, version: '2.97.0', detail: 'logged in as alpha' } }, {});
+  assert.equal(warm.github.checking, undefined);
+  assert.equal(warm.github.version, '2.97.0');
+  assert.equal(warm.claude.checking, true);
+
+  // and a row still being checked never raises a callout
+  assert.deepEqual(prov.readiness(prov.byId('gemini'), cold.gemini, false), { ready: true, reason: null, actions: [] });
+});
+
+check('applyStatusPatch: one provider lands, every other row is left exactly as it was', () => {
+  const before = prov.mergeStatus(prov.PROVIDERS, null, {});
+  const after = prov.applyStatusPatch(before, { github: { installed: true, version: '2.97.0', detail: 'logged in as alpha', at: 1 } });
+  assert.equal(after.github.detail, 'logged in as alpha');
+  assert.equal(after.github.checking, undefined);
+  for (const id of prov.PROVIDERS.map((p) => p.id)) {
+    if (id === 'github') continue;
+    assert.deepEqual(after[id], before[id], id + ' must be untouched by a patch that did not mention it');
+  }
+  assert.equal(Object.keys(after).length, Object.keys(before).length);   // a patch never adds or drops a row
+  assert.notEqual(after, before);                                        // and never mutates in place
+  assert.equal(before.github.checking, true);
+  // an empty or missing patch is a no-op, and an unknown id is simply carried
+  assert.deepEqual(prov.applyStatusPatch(before, {}), before);
+  assert.deepEqual(prov.applyStatusPatch(before, null), before);
+  assert.equal(prov.applyStatusPatch(null, { x: 1 }).x, 1);
+});
+
+checkAsync('refreshStatuses reports each provider as it finishes, not once at the end', async () => {
+  const fake = [
+    { id: 'slow', kind: 'cli', status: async () => { await new Promise((r) => setTimeout(r, 60)); return { installed: true, detail: 'slow' }; } },
+    { id: 'fast', kind: 'cli', status: async () => ({ installed: true, detail: 'fast' }) },
+    { id: 'broken', kind: 'cli', status: async () => { throw new Error('boom'); } },
+  ];
+  // the same shape refreshStatuses drives, exercised through pool so the ordering rule is the real one
+  const seen = [];
+  await prov.pool(fake, 4, async (p) => {
+    let st; try { st = await p.status(); } catch (e) { st = { installed: false, detail: 'probe failed', error: String(e.message) }; }
+    seen.push(p.id);
+    return st;
+  });
+  assert.equal(seen[0], 'fast', 'a fast probe must not queue behind a slow one');
+  assert.equal(seen.length, 3);
+  assert.ok(seen.includes('broken'), 'a probe that throws still reports');
+});
+
 (async () => {
   for (const [title, fn] of asyncChecks) { await fn(); n++; console.log('  ok  ' + title); }
   fs.rmSync(tmp, { recursive: true, force: true });

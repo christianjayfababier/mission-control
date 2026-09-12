@@ -211,7 +211,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron });
     sendSnapshot();
-    setTimeout(() => sendProviders(false), 600);   // accounts & AI: first probe round, pushed when it lands
+    setTimeout(() => probeProviders(false), 600);   // accounts & AI: first probe round, pushed result by result
     if (SCREENSHOT) setTimeout(async () => {
       let shotFailed = false;
       try {
@@ -305,18 +305,30 @@ ipcMain.handle('team:set', (_e, { path: p, name, model, effort }) => {
 // ── accounts & AI: the provider registry, its status probes, the API keys and per-project enablement
 // (docs/ACCOUNTS-CONTRACT.md). Nothing here throws across IPC and no key value ever crosses it: the
 // renderer learns `has` and `setAt`, the plain text only ever reaches a terminal's environment.
-async function providersPayload(force) {
+// The dialogs must never wait for a probe: `providers:list` answers from the cache in the same tick, with
+// `checking` for anything nobody has asked yet, and the probe round pushes each answer as it lands.
+function providersPayload() {
   let status = {};
-  try { status = await providers.statusAll({ force, keyInfo: secrets.info() }); } catch (e) { console.error('providers', e && e.message); }
+  try { status = providers.cachedStatus(secrets.info()); } catch (e) { console.error('providers', e && e.message); }
   return { providers: providers.list(), status, secrets: secrets.info(), encryption: secrets.available(), global: globalSettings().providers || {} };
 }
-async function sendProviders(force) {
-  if (!win || win.isDestroyed()) return;
-  const p = await providersPayload(force);
-  if (win && !win.isDestroyed()) win.webContents.send('providers', p);
+let probing = false;
+/** Start a probe round if one is not already running; every result is pushed the moment it arrives. */
+function probeProviders(force) {
+  if (probing && !force) return;
+  probing = true;
+  providers.refreshStatuses({
+    force,
+    onResult: (id, st) => { if (win && !win.isDestroyed()) win.webContents.send('providers', { status: { [id]: st }, partial: true }); },
+  }).catch((e) => console.error('providers', e && e.message)).then(() => { probing = false; });
 }
-ipcMain.handle('providers:list', () => providersPayload(false));
-ipcMain.handle('providers:refresh', async () => { const p = await providersPayload(true); if (win && !win.isDestroyed()) win.webContents.send('providers', p); return p; });
+/** Push what we know now, and (optionally) start a fresh round behind it. */
+function sendProviders(force) {
+  if (win && !win.isDestroyed()) win.webContents.send('providers', providersPayload());
+  setTimeout(() => probeProviders(!!force), 0);
+}
+ipcMain.handle('providers:list', () => { const p = providersPayload(); setTimeout(() => probeProviders(false), 0); return p; });
+ipcMain.handle('providers:refresh', () => { const p = providersPayload(); setTimeout(() => probeProviders(true), 0); return p; });
 /** A login or install runs where the owner can see it and answer it: a real terminal tab in the project. */
 async function providerTerminal(id, projectPath, line) {
   if (!line) return { error: 'nothing to run for ' + id };
@@ -336,10 +348,10 @@ ipcMain.handle('providers:install', async (_e, { id, path: projectPath } = {}) =
 ipcMain.handle('secrets:set', async (_e, { id, value } = {}) => {
   if (!providers.byId(id) || providers.byId(id).kind !== 'key') return { error: 'unknown key provider: ' + id };
   const r = secrets.set(id, value);
-  if (r.ok) sendProviders(false);   // no journal entry: an API key is machine-wide, not a project event
+  if (r.ok && win && !win.isDestroyed()) win.webContents.send('providers', providersPayload());   // key rows only; no re-probe
   return r;
 });
-ipcMain.handle('secrets:remove', (_e, { id } = {}) => { const r = secrets.remove(id); if (r.ok) sendProviders(false); return r; });
+ipcMain.handle('secrets:remove', (_e, { id } = {}) => { const r = secrets.remove(id); if (r.ok && win && !win.isDestroyed()) win.webContents.send('providers', providersPayload()); return r; });
 /** `path` null means the machine-wide default; a project's own setting always wins over it. */
 ipcMain.handle('providers:enable', (_e, { path: p, id, enabled } = {}) => {
   if (!providers.byId(id)) return { error: 'unknown provider: ' + id };
@@ -397,6 +409,12 @@ ipcMain.handle('lead:prepare', async (_e, arg) => {
   return file;
 });
 ipcMain.handle('lines', (_e, { kind, id, afterSeq }) => watcher.lines(kind, id, afterSeq || 0));
+// --view telemetry: the renderer reports when the requested view was actually on screen, and how long the
+// first snapshot and the first project selection took. One line, so a screenshot run can be diagnosed.
+ipcMain.on('view:ready', (_e, m = {}) => {
+  const ms = (x) => (x == null ? '?' : Math.round(x) + 'ms');
+  console.log(`VIEW READY ${m.view || '?'}${m.gaveUp ? ' (gave up waiting)' : ''} · env\u2192snapshot ${ms(m.toSnapshot)} · env\u2192selected ${ms(m.toSelected)} · env\u2192view ${ms(m.toView)} · env\u2192painted ${ms(m.toPainted)} · first render ${ms(m.render)} (workers ${ms(m.workers)}, ${m.workerCount == null ? '?' : m.workerCount} panes)`);
+});
 
 // ── project registry
 ipcMain.handle('projects:add', async () => {
