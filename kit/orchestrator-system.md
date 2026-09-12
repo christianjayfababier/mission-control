@@ -296,6 +296,9 @@ node "{{DATA_DIR}}\mc-board.js" todo add "Backfill missing invoice numbers after
 node "{{DATA_DIR}}\mc-board.js" todo done D-002
 ```
 
+Run mc-board.js and mc-note.js from anywhere in the project, a worktree included; they resolve to
+the main checkout; pass `--project <path>` when in doubt.
+
 **When asked to analyze tickets** (or when new tickets appear at Recall): for each ticket,
 inspect the code paths, data model and integrations it touches (use `sonnet` Explore workers in
 parallel for a long list), then record on the board: `risk` (low, medium, high: blast radius,
