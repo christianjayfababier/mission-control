@@ -30,6 +30,8 @@ jobs:
       - run: npm ci
       # node-pty ships N-API prebuilds that load under Electron as they are, so package.json sets
       # npmRebuild false on purpose: its tarball has no winpty sources, and a rebuild fails at gyp.
+      # --publish never (in the npm script): with a publish block configured, electron-builder on a tag build would
+      # otherwise try to upload the release itself and fail without a token; this workflow uploads the files below.
       - run: npm run dist
       - uses: actions/upload-artifact@v4
         with:
