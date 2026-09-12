@@ -21,6 +21,7 @@ const providers = require('./providers');
 const globalsettings = require('./globalsettings');
 const { Secrets, electronEncryptor } = require('./secrets');
 const newproject = require('./newproject-lib');
+const updater = require('./updater');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -110,6 +111,7 @@ const checkpoints = new CheckpointWriter(watcher, {
 const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json'), onNote: (p, text) => checkpoints.journal(p, `PR watch · ${text}`) });
 const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
+let runningWorkers = 0;   // last snapshot's total; the updater refuses to restart while anything is running
 
 function registry() { const r = readJson(REGISTRY, []); return Array.isArray(r) ? r : []; }
 
@@ -170,7 +172,9 @@ function snapshot() {
   recordSeen(snap);
   const hid = hiddenSet();
   snap.projects = snap.projects.filter((p) => p.pinned || !hid.has(norm(p.path))); // "Hide" only applies to unpinned projects
-  return enrich(snap);
+  const full = enrich(snap);
+  runningWorkers = full.projects.reduce((n, p) => n + (p.running || 0), 0);
+  return full;
 }
 function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', snapshot()); }
 // git remotes/branches and open PRs for projects that matter right now (active in the last 12 h or pinned)
@@ -212,6 +216,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron });
     sendSnapshot();
+    if (updates) win.webContents.send('update', updates.state());
     setTimeout(() => probeProviders(false), 600);   // accounts & AI: first probe round, pushed result by result
     if (SCREENSHOT) setTimeout(async () => {
       let shotFailed = false;
@@ -574,6 +579,23 @@ ipcMain.on('pty:resize', (_e, { id, cols, rows }) => { const p = ptys.get(id); i
 ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); } });
 
 function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); }
-app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); setTimeout(() => refreshIntegrations(true), 1500); });
-app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); app.quit(); });
+
+// ── auto-update (T-022, updater.js): only alive in a packaged build, and it never restarts on its own.
+// Busy = an open terminal or a running worker; the download waits on disk until the owner is idle.
+let updates = null;
+function startUpdater() {
+  try {
+    updates = updater.start({
+      app,
+      isBusy: () => ptys.size > 0 || runningWorkers > 0,
+      send: (s) => { if (win && !win.isDestroyed()) win.webContents.send('update', s); },
+    });
+  } catch (e) { console.error('updater', e && e.message); }
+}
+ipcMain.handle('update:state', () => (updates ? updates.state() : { state: 'disabled', reason: 'not started' }));
+ipcMain.handle('update:check', () => (updates ? updates.check() : { state: 'disabled', reason: 'not started' }));
+ipcMain.handle('update:install', () => (updates ? updates.installNow() : { error: 'the updater is not running' }));
+
+app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); startUpdater(); setTimeout(() => refreshIntegrations(true), 1500); });
+app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); if (updates) updates.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });
