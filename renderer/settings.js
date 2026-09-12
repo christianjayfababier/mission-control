@@ -159,7 +159,12 @@
     if (u.state === 'checking') return 'Checking for updates…';
     if (u.state === 'available') return `${u.version} downloading`;
     if (u.state === 'downloading') return `${u.version} downloading ${u.percent}%`;
-    if (u.state === 'ready') return `${u.version} ready: restart to install` + (u.busy ? ' (close terminals and wait for workers first)' : '');
+    // ready: the same two counts the header chip's restart dialog quotes, so About never contradicts it (T-028)
+    if (u.state === 'ready') {
+      const w = u.workers || 0, t = u.terminals || 0;
+      const cost = [w ? `${w} worker${w === 1 ? '' : 's'} running` : '', t ? `${t} terminal${t === 1 ? '' : 's'} open` : ''].filter(Boolean).join(', ');
+      return `${u.version} ready: restart to install` + (cost ? ` (${cost})` : '');
+    }
     if (u.state === 'error') return u.error || 'the last check failed';
     return u.checkedAt ? `You are on ${mine}, latest` : `You are on ${mine}. No check has run yet.`;
   }
