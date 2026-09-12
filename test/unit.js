@@ -11,6 +11,7 @@ const { Secrets } = require('../secrets.js');
 const gset = require('../globalsettings.js');
 const np = require('../newproject-lib.js');
 const { UpdaterState } = require('../updater.js');
+const diag = require('../diag.js');   // requiring it here is itself the "runs under plain node" check
 const { checkVersion } = require('../build/check-version.js');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -782,6 +783,78 @@ check('updater: install is refused before an update is downloaded, however quiet
   assert.equal(u.installBlocker(), 'no update is ready');      // available is not downloaded
   u.progress(99);
   assert.equal(u.installBlocker(), 'no update is ready');
+});
+
+// ── crash evidence (T-024, diag.js): the black box that has to keep working when everything else does not
+check('diag: a log line is one line, carries the pid, and survives a multi-line detail', () => {
+  const t = '2026-09-13T08:00:00.000Z';
+  assert.equal(diag.formatLine({ time: t, pid: 4242, level: 'info', event: 'startup', detail: 'version=0.2.0' }),
+    '2026-09-13T08:00:00.000Z pid=4242 info startup version=0.2.0');
+  // a stack is the whole point of the log, and it must not become five lines the reader has to stitch back together
+  const err = new Error('boom'); err.stack = 'Error: boom\n    at a (x.js:1:1)\n    at b (y.js:2:2)';
+  const line = diag.formatLine({ time: t, pid: 1, level: 'error', event: 'uncaught exception', detail: err });
+  assert.equal(line.includes('\n'), false);
+  assert.match(line, /pid=1 error uncaught-exception Error: boom \| Error: boom at a \(x\.js:1:1\) at b \(y\.js:2:2\)/);
+  // an object detail becomes key=value, and a value with spaces is quoted so the pairs stay readable
+  assert.equal(diag.formatLine({ time: t, pid: 7, event: 'render-process-gone', detail: { reason: 'crashed', exitCode: 5, skip: undefined, note: 'two words' } }),
+    '2026-09-13T08:00:00.000Z pid=7 info render-process-gone reason=crashed exitCode=5 note="two words"');
+  assert.equal(diag.formatLine({ time: t, pid: 7, event: 'quit' }), '2026-09-13T08:00:00.000Z pid=7 info quit');   // no detail, no trailing space
+  assert.equal(diag.formatLine().startsWith(new Date().toISOString().slice(0, 11)), true);                          // defaults: now, this pid
+  assert.match(diag.formatLine(), new RegExp('pid=' + process.pid + ' info event$'));
+});
+
+check('diag: the log rotates at its cap, keeps exactly one .1, and never throws on a missing file', () => {
+  const dir = fs.mkdtempSync(path.join(tmp, 'diag-'));
+  const file = path.join(dir, 'main.log');
+  assert.equal(diag.rotate(file, 100), false);                       // nothing there yet
+  fs.writeFileSync(file, 'x'.repeat(99));
+  assert.equal(diag.rotate(file, 100), false);                       // under the cap: left alone
+  assert.equal(fs.existsSync(file + '.1'), false);
+  fs.writeFileSync(file, 'first'.padEnd(100, '!'));
+  assert.equal(diag.rotate(file, 100), true);
+  assert.equal(fs.existsSync(file), false);                          // moved aside; the next write recreates it
+  assert.match(fs.readFileSync(file + '.1', 'utf8'), /^first/);
+  fs.writeFileSync(file, 'second'.padEnd(100, '!'));
+  assert.equal(diag.rotate(file, 100), true);
+  assert.match(fs.readFileSync(file + '.1', 'utf8'), /^second/);      // the older .1 is dropped, never a .2
+  assert.equal(fs.existsSync(file + '.2'), false);
+
+  // and the writer end to end: one line per event, appended, the pid in every line
+  const log = new diag.DiagLog(path.join(dir, 'logs'), { maxBytes: 1024 * 1024 });
+  log.write('info', 'startup', { version: '0.2.0' });
+  log.write('error', 'render-process-gone', { reason: 'crashed', exitCode: 5 });
+  const lines = fs.readFileSync(log.file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2);
+  for (const l of lines) assert.match(l, new RegExp('^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z pid=' + process.pid + ' '));
+  assert.match(lines[1], /error render-process-gone reason=crashed exitCode=5$/);
+  assert.equal(log.info().bytes, fs.statSync(log.file).size);
+  assert.equal(log.info().error, null);
+});
+
+check('diag: low memory is the commit charge above 85 % or free RAM under 1 GB, and a missing number is never a guess', () => {
+  // the 2026-09-12 crash: 52 of 65 GB committed is 80 % — not yet the flag, which is why the guard also watches free RAM
+  const calm = diag.memoryVerdict({ commitUsedMb: 52 * 1024, commitLimitMb: 65 * 1024, freeMb: 4096 });
+  assert.equal(calm.low, false); assert.equal(calm.commitPct, 80);
+  const tight = diag.memoryVerdict({ commitUsedMb: 60 * 1024, commitLimitMb: 65 * 1024, freeMb: 4096 });
+  assert.equal(tight.low, true); assert.equal(tight.commitPct, 92.3);
+  assert.match(tight.reasons.join(' '), /commit 92\.3%/);
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 85, commitLimitMb: 100, freeMb: 4096 }).low, false);   // 85 % exactly is not "above 85 %"
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 86, commitLimitMb: 100, freeMb: 4096 }).low, true);
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1023 }).low, true);     // free RAM alone is enough
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 1, commitLimitMb: 100, freeMb: 1024 }).low, false);
+  // nothing known: no flag, no NaN, no throw
+  const blind = diag.memoryVerdict({});
+  assert.equal(blind.low, false); assert.equal(blind.commitPct, null); assert.equal(blind.freeMb, null);
+  assert.equal(diag.memoryVerdict().low, false);
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 5, commitLimitMb: 0, freeMb: 2048 }).commitPct, null);  // no limit, no percentage
+  assert.equal(diag.memoryVerdict({ commitUsedMb: 'lots', commitLimitMb: NaN, freeMb: -1 }).low, false);
+});
+
+check('diag.js loads in a plain node process, with no Electron anywhere near it', () => {
+  // main.js requires it before anything else, so a broken require here would take the whole app down
+  // before it could log why. This is the same check npm test makes of itself, from a clean process.
+  const out = execFileSync(process.execPath, ['-e', "const d = require(process.argv[1]); console.log(typeof d.installHandlers, typeof d.formatLine, d.formatLine({ time: 't', pid: 9, event: 'ok' }));", path.join(__dirname, '..', 'diag.js')], { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '' } });
+  assert.equal(out.trim(), 'function function t pid=9 info ok');
 });
 
 check('every module main.js and preload.js require must be in build.files, or the installed app dies on boot', () => {
