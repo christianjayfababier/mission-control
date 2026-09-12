@@ -258,6 +258,34 @@ async function refreshIntegrations(force) {
   finally { refreshing = false; }
 }
 
+// ── screenshot mode: one capture, whichever trigger comes first (T-029).
+// Without --view that is the --wait wall clock, exactly as before. With --view it is the renderer's own
+// `view:ready` plus a short settle, so the shot shows the requested view instead of whatever had been
+// painted when the clock ran out; --wait stays the upper bound and the fallback if view:ready never comes.
+const VIEW_SETTLE_MS = 300;
+let shotTimer = null, shotTaken = false;
+async function takeScreenshot(why) {
+  if (shotTaken) return; shotTaken = true;
+  if (shotTimer) { clearTimeout(shotTimer); shotTimer = null; }
+  console.log('screenshot trigger: ' + why);
+  let shotFailed = false;
+  try {
+    if (!win || win.isDestroyed()) throw new Error('the window is gone');
+    // An occluded or not-yet-composited window captures as an empty image (seen roughly 1 run in 6),
+    // which would make the smoke test flaky. Retry until there are real pixels.
+    let buf = null;
+    for (let i = 0; i < 10 && !(buf && buf.length > 1024); i++) {
+      if (i) await new Promise((r) => setTimeout(r, 300));
+      const img = await win.webContents.capturePage();
+      buf = img.isEmpty() ? null : img.toPNG();
+    }
+    if (!buf || !buf.length) throw new Error('capturePage kept returning an empty image');
+    fs.writeFileSync(path.resolve(SCREENSHOT), buf); console.log('screenshot written', path.resolve(SCREENSHOT));
+  }
+  catch (e) { shotFailed = true; console.error('screenshot failed', e); }
+  killAllPtys(); watcher.stop(); sweepShotProfiles(); app.exit(rendererFailed || shotFailed ? 1 : 0); // the PNG is written either way, so a human can look
+}
+
 function createWindow() {
   const st = readJson(WINSTATE, {});
   win = new BrowserWindow({
@@ -274,28 +302,12 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron, packaged: app.isPackaged });
     win.webContents.send('diag', diagnostics.state());   // low-memory chip and, after a crash, the reload banner
     sendSnapshot();
     if (updates) win.webContents.send('update', updates.state());
     setTimeout(() => probeProviders(false), 600);   // accounts & AI: first probe round, pushed result by result
-    if (SCREENSHOT) setTimeout(async () => {
-      let shotFailed = false;
-      try {
-        // An occluded or not-yet-composited window captures as an empty image (seen roughly 1 run in 6),
-        // which would make the smoke test flaky. Retry until there are real pixels.
-        let buf = null;
-        for (let i = 0; i < 10 && !(buf && buf.length > 1024); i++) {
-          if (i) await new Promise((r) => setTimeout(r, 300));
-          const img = await win.webContents.capturePage();
-          buf = img.isEmpty() ? null : img.toPNG();
-        }
-        if (!buf || !buf.length) throw new Error('capturePage kept returning an empty image');
-        fs.writeFileSync(path.resolve(SCREENSHOT), buf); console.log('screenshot written', path.resolve(SCREENSHOT));
-      }
-      catch (e) { shotFailed = true; console.error('screenshot failed', e); }
-      killAllPtys(); watcher.stop(); sweepShotProfiles(); app.exit(rendererFailed || shotFailed ? 1 : 0); // the PNG is written either way, so a human can look
-    }, SCREENSHOT_WAIT);
+    if (SCREENSHOT) shotTimer = setTimeout(() => takeScreenshot(`--wait ${SCREENSHOT_WAIT} ms elapsed`), SCREENSHOT_WAIT);
   });
 }
 
@@ -508,6 +520,8 @@ ipcMain.handle('lines', (_e, { kind, id, afterSeq }) => watcher.lines(kind, id, 
 ipcMain.on('view:ready', (_e, m = {}) => {
   const ms = (x) => (x == null ? '?' : Math.round(x) + 'ms');
   console.log(`VIEW READY ${m.view || '?'}${m.gaveUp ? ' (gave up waiting)' : ''} · env\u2192snapshot ${ms(m.toSnapshot)} · env\u2192selected ${ms(m.toSelected)} · env\u2192view ${ms(m.toView)} · env\u2192painted ${ms(m.toPainted)} · first render ${ms(m.render)} (workers ${ms(m.workers)}, ${m.workerCount == null ? '?' : m.workerCount} panes)`);
+  // The view is on screen: give it a moment to settle and shoot, instead of waiting out the clock.
+  if (SCREENSHOT && START_VIEW) setTimeout(() => takeScreenshot(`view:ready + ${VIEW_SETTLE_MS} ms settle`), VIEW_SETTLE_MS);
 });
 
 // ── project registry

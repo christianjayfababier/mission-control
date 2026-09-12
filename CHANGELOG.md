@@ -8,6 +8,21 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+### Added
+
+- A copy started from the checkout now says so: a muted **dev · <version>** chip in the project header and
+  **(dev)** in the window title, so it is never mistaken for the installed Mission Control (T-029).
+- **Global rules** keeps track of unsaved edits: while the textarea differs from the file on disk the section
+  is marked **unsaved** and **Save** lights up, and leaving it — another section, **Done**, Esc or **Reload
+  from disk** — asks inline first (**Save / Discard / Keep editing**) instead of dropping the text (T-029).
+
+### Fixed
+
+- The smoke test no longer guesses when the app is ready: with `--view` the screenshot is taken when the
+  renderer reports the view is on screen (plus a 300 ms settle) instead of when `--wait` runs out, which stays
+  the upper bound. It also fails a blank capture (the PNG must be over 50 KB) and prints the `VIEW READY`
+  timing line, and `SMOKE_VIEW=<view>` runs the same check against a view (T-029).
+
 ## 0.2.2 - 2026-09-13
 
 ### Added

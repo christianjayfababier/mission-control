@@ -14,7 +14,12 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const WAIT = Number(process.env.SMOKE_WAIT) || 3500;
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT) || 60000;
-const MIN_PNG_BYTES = 20 * 1024;
+// SMOKE_VIEW runs the same check against a --view boot (e.g. SMOKE_VIEW=settings-rules): main.js then
+// takes the shot when the renderer reports view:ready instead of when the clock runs out (T-029).
+const VIEW = process.env.SMOKE_VIEW || '';
+// A window that rendered nothing compresses to a few KB; a real one is hundreds. 50 KB is well clear of
+// both, and it is the assertion that catches a blank capture the PNG header alone would call valid.
+const MIN_PNG_BYTES = 50 * 1024;
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // Chromium and node-pty's conpty helper are chatty when another instance is running.
@@ -50,7 +55,9 @@ function run() {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE; // otherwise electron runs as plain node and main.js bails out with exit 2
 
-    const child = spawn(electronBin, ['.', '--screenshot', OUT, '--wait', String(WAIT)], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const args = ['.', '--screenshot', OUT, '--wait', String(WAIT)];
+    if (VIEW) args.push('--view', VIEW);
+    const child = spawn(electronBin, args, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
     const log = [];
     child.stdout.on('data', (d) => log.push(String(d)));
     child.stderr.on('data', (d) => log.push(String(d)));
@@ -66,7 +73,7 @@ const OUT = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mc-smoke-')), 'smok
 
 (async () => {
   const started = Date.now();
-  console.log(`smoke: booting Mission Control in screenshot mode (wait ${WAIT} ms, timeout ${TIMEOUT_MS} ms)`);
+  console.log(`smoke: booting Mission Control in screenshot mode (${VIEW ? `--view ${VIEW}, ` : ''}wait ${WAIT} ms, timeout ${TIMEOUT_MS} ms)`);
   const r = await run();
   const secs = ((Date.now() - started) / 1000).toFixed(1);
   const fails = [];
@@ -81,6 +88,10 @@ const OUT = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mc-smoke-')), 'smok
   const lines = String(r.out || '').split(/\r?\n/).filter((l) => l.trim() && !NOISE.some((n) => n.test(l)));
   const rendererErrors = lines.filter((l) => RENDERER_MARKER.test(l) || (JS_ERROR.test(l) && FROM_RENDERER.test(l)));
   for (const l of rendererErrors.slice(0, 10)) fails.push(`renderer problem: ${l.trim()}`);
+
+  // The renderer's own timing line, and which trigger the capture ended up using. Printed on a pass too:
+  // it is the only place a slow boot shows up before it turns into a flaky screenshot.
+  for (const l of lines.filter((l) => /^(VIEW READY|screenshot trigger:)/.test(l.trim()))) console.log('  ' + l.trim());
 
   if (fails.length) {
     console.error('\nsmoke FAIL');
