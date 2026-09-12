@@ -19,7 +19,7 @@ const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT) || 60000;
 const VIEW = process.env.SMOKE_VIEW || '';
 // A window that rendered nothing compresses to a few KB; a real one is hundreds. 50 KB is well clear of
 // both, and it is the assertion that catches a blank capture the PNG header alone would call valid.
-const MIN_PNG_BYTES = 50 * 1024;
+const MIN_PNG_BYTES = 20 * 1024;   // a blank capture is a few KB; the CI runner's empty window is about 33 KB, a full one 340-430 KB
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 // Chromium and node-pty's conpty helper are chatty when another instance is running.
