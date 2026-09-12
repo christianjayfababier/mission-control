@@ -29,6 +29,7 @@ const PROVIDERS = [
     winget: 'Anthropic.ClaudeCode', install: WINGET('Anthropic.ClaudeCode'),
     installFallback: 'irm https://claude.ai/install.ps1 | iex',
     login: 'claude auth login',
+    exec: 'claude -p "{prompt}"',            // verified locally: -p/--print runs one prompt and exits
     docs: 'https://code.claude.com/docs/en/authentication',
     blurb: 'Mission Control supervises Claude Code sessions; without it nothing here runs.',
     status: probeClaude,
@@ -46,6 +47,7 @@ const PROVIDERS = [
     winget: 'OpenAI.Codex', install: WINGET('OpenAI.Codex'),
     installFallback: 'npm install -g @openai/codex',
     login: 'codex login',
+    exec: 'codex exec "{prompt}"',           // verified locally: `codex exec` runs Codex non-interactively
     docs: 'https://learn.chatgpt.com/docs/auth',
     blurb: 'OpenAI’s coding agent. The ChatGPT desktop app bundles it off PATH; Mission Control finds it there too.',
     status: probeCodex,
@@ -210,6 +212,26 @@ function keyStatus(entry) {
   return { installed: !!setAt, version: null, loggedIn: setAt ? true : null, account: null, detail: setAt ? 'key stored ' + String(setAt).slice(0, 10) : 'no key stored', at: Date.now() };
 }
 
+
+// ── readiness: is a provider this project switched on actually usable? ────────────────────────────
+/**
+ * Pure. Given a registry entry, its last Status and whether a key is stored, say whether the owner still
+ * has something to do, and what. A status we have not got yet (or a `loggedIn` the vendor cannot tell us,
+ * like Gemini's) is never reported as a problem: only a definite `false` is.
+ *   reason: null | 'not-installed' | 'not-logged-in' | 'no-key'
+ *   actions: the buttons the dialog should offer, in order — 'install' | 'login' | 'settings'
+ */
+function readiness(provider, status, hasKey) {
+  const p = provider || {};
+  if (p.kind === 'key') {
+    return hasKey ? { ready: true, reason: null, actions: [] } : { ready: false, reason: 'no-key', actions: ['settings'] };
+  }
+  const st = status || {};
+  if (st.installed === false) return { ready: false, reason: 'not-installed', actions: p.install ? ['install'] : [] };
+  if (st.loggedIn === false) return { ready: false, reason: 'not-logged-in', actions: p.login ? ['login'] : [] };
+  return { ready: true, reason: null, actions: [] };
+}
+
 // ── the cache ────────────────────────────────────────────────────────────────────────────────────
 const CACHE_MS = 60 * 1000;
 let cache = { at: 0, status: null };
@@ -273,7 +295,7 @@ function loginLine(id, status) {
 function installLine(id) { const p = byId(id); return p ? (p.install || null) : null; }
 
 module.exports = {
-  PROVIDERS, list, byId, statusAll, invalidate, keyStatus,
+  PROVIDERS, list, byId, statusAll, invalidate, keyStatus, readiness,
   assembleEnv, isEnabled, loginLine, installLine,
   parseVersion, parseClaudeStatus, parseGhStatus, parseCodexLogin,
   which, codexFromChatGptApp, run, cleanEnv, CACHE_MS,

@@ -387,6 +387,45 @@ check('unhide: drops one project whatever its spelling, and leaves the list alon
   assert.deepEqual(gset.hiddenRows([], []), []);
 });
 
+
+check('readiness: a tool that is missing, logged out or keyless, and one that is ready', () => {
+  const gemini = prov.byId('gemini'), codex = prov.byId('codex'), key = prov.byId('openai-key');
+
+  const missing = prov.readiness(gemini, { installed: false, loggedIn: null }, false);
+  assert.deepEqual(missing, { ready: false, reason: 'not-installed', actions: ['install'] });
+
+  const out = prov.readiness(codex, { installed: true, loggedIn: false }, false);
+  assert.deepEqual(out, { ready: false, reason: 'not-logged-in', actions: ['login'] });
+
+  assert.deepEqual(prov.readiness(key, null, false), { ready: false, reason: 'no-key', actions: ['settings'] });
+  assert.deepEqual(prov.readiness(key, null, true), { ready: true, reason: null, actions: [] });
+
+  const ready = prov.readiness(codex, { installed: true, loggedIn: true }, false);
+  assert.deepEqual(ready, { ready: true, reason: null, actions: [] });
+
+  // not installed wins over not logged in: install first, then log in
+  assert.equal(prov.readiness(codex, { installed: false, loggedIn: false }, false).reason, 'not-installed');
+  // what we do not know is never a complaint: Gemini has no status command, and a probe may not have run
+  assert.equal(prov.readiness(gemini, { installed: true, loggedIn: null }, false).ready, true);
+  assert.equal(prov.readiness(codex, null, false).ready, true);
+  assert.equal(prov.readiness(codex, {}, false).ready, true);
+  assert.equal(prov.readiness(null, null, false).ready, true);
+
+  // a provider with no way to install or log in offers no button it cannot honour
+  assert.deepEqual(prov.readiness({ kind: 'cli', name: 'X' }, { installed: false }, false).actions, []);
+  assert.deepEqual(prov.readiness({ kind: 'cli', name: 'X', install: 'x' }, { installed: true, loggedIn: false }, false).actions, []);
+});
+
+check('exec: the optional one-shot template, only where the command is verified', () => {
+  assert.equal(prov.byId('claude').exec, 'claude -p "{prompt}"');
+  assert.equal(prov.byId('codex').exec, 'codex exec "{prompt}"');
+  for (const p of prov.PROVIDERS) {
+    if (p.exec === undefined) continue;
+    assert.ok(p.exec.includes('{prompt}'), p.id + ' exec must carry the {prompt} placeholder');
+  }
+  assert.equal(prov.list().find((p) => p.id === 'claude').exec, 'claude -p "{prompt}"');   // it crosses IPC
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(`unit PASS  ${n} checks`);
