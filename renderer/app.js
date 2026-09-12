@@ -178,7 +178,7 @@ async function newTerminal(p, { activate = true } = {}) {
   const list = state.terms.get(p.key) || []; const n = list.length + 1;
   const rec = { ptyId, term, fit, el: container, title: `Terminal ${n}`, projectKey: p.key, sessionId: null, claudeAt: 0, typed: '' };
   list.push(rec); state.terms.set(p.key, list);
-  term.onData((d) => { window.mc.ptyWrite(ptyId, d); trackTyped(rec, d); });
+  term.onData((d) => { if (d.length > PTY_SLICE) writeText(ptyId, d); else ptySend(ptyId, () => window.mc.ptyWrite(ptyId, d)); trackTyped(rec, d); }); // a paste arrives as one big chunk: slice it
   new ResizeObserver(() => { if (container.classList.contains('active')) { try { fit.fit(); window.mc.ptyResize(ptyId, term.cols, term.rows); } catch { /* ignore */ } } }).observe(container);
   if (activate) activateTab(ptyId); else renderTabs();
   return rec;
@@ -295,11 +295,65 @@ function renderLeadPane(p) {
   card.appendChild(foot);
   return pane;
 }
+// Claude Code's Windows TUI (2.1.269) keeps only the LAST 1024-byte ConPTY chunk of one write, so a message or a paste
+// over ~1000 characters loses its beginning. Anything long therefore goes out in small slices with a gap between them.
+// test/pty-paste-harness.js proves that against a real TUI; it repeats these three numbers and sliceForPty() verbatim.
+const PTY_SLICE = 512, PTY_SLICE_GAP = 25, PTY_ENTER_DELAY = 120;
+function sliceForPty(text, max = PTY_SLICE) {
+  const out = []; let i = 0;
+  while (i < text.length) {
+    let end = Math.min(i + max, text.length);
+    if (end < text.length) {
+      const c = text.charCodeAt(end - 1);
+      if (c >= 0xd800 && c <= 0xdbff) end -= 1; // never split a surrogate pair
+      const esc = text.lastIndexOf('\x1b', end - 1);
+      if (esc > i && end - esc < 16) end = esc; // never split an escape sequence
+    }
+    if (end <= i) end = Math.min(i + max, text.length); // always make progress
+    out.push(text.slice(i, end)); i = end;
+  }
+  return out;
+}
+// A slow send holds the pty for as long as it drains, so every write to that pty queues behind it: otherwise a keystroke,
+// a second Send or an inbox answer would land in the middle of someone else's message. ptyId → tail promise while busy.
+const ptyQueue = new Map();
+/** Run fn once the pty is free, and keep it busy until fn's promise settles. Idle pty: fn runs now, in this same tick. */
+function ptySend(ptyId, fn) {
+  const prev = ptyQueue.get(ptyId);
+  let tail;
+  if (prev) tail = prev.then(fn);
+  else { try { tail = Promise.resolve(fn()); } catch { tail = Promise.resolve(); } }
+  tail = tail.catch(() => { /* a failed write must not block the next one */ });
+  ptyQueue.set(ptyId, tail);
+  tail.then(() => { if (ptyQueue.get(ptyId) === tail) ptyQueue.delete(ptyId); }); // nothing queued behind us: forget the pty
+  return tail;
+}
+/** Write text into a pty in slices the TUI keeps. Callers must hold the pty (be inside ptySend). */
+function drainText(ptyId, text, { enter = false } = {}) {
+  const parts = sliceForPty(text);
+  const tail = () => (enter ? new Promise((res) => setTimeout(() => { window.mc.ptyWrite(ptyId, '\r'); res(); }, PTY_ENTER_DELAY)) : Promise.resolve());
+  if (parts.length <= 1) { if (text) window.mc.ptyWrite(ptyId, text); return tail(); }
+  return new Promise((resolve) => {
+    let i = 0;
+    const step = () => {
+      window.mc.ptyWrite(ptyId, parts[i++]);
+      if (i < parts.length) setTimeout(step, PTY_SLICE_GAP); else tail().then(resolve);
+    };
+    step();
+  });
+}
+const writeText = (ptyId, text, opts) => ptySend(ptyId, () => drainText(ptyId, text, opts));
 function sendToSession(sid, text) {
   const t = hostOf(sid); if (!t) return false;
   const body = text.replace(/\r\n?/g, '\n');
-  window.mc.ptyWrite(t.ptyId, body.includes('\n') ? '\x1b[200~' + body + '\x1b[201~' : body); // bracketed paste keeps newlines from submitting early
-  setTimeout(() => window.mc.ptyWrite(t.ptyId, '\r'), 120);
+  ptySend(t.ptyId, () => { // marker, body, marker and Enter are one job: nothing may be written between them
+    if (!body.includes('\n')) return drainText(t.ptyId, body, { enter: true });
+    window.mc.ptyWrite(t.ptyId, '\x1b[200~'); // bracketed paste keeps newlines from submitting early
+    return drainText(t.ptyId, body).then(() => new Promise((res) => {
+      window.mc.ptyWrite(t.ptyId, '\x1b[201~');
+      setTimeout(() => { window.mc.ptyWrite(t.ptyId, '\r'); res(); }, PTY_ENTER_DELAY);
+    }));
+  });
   return true;
 }
 function refreshSessionFooters(p) {

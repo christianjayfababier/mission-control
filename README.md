@@ -106,5 +106,7 @@ there; the app tolerates that and the smoke test does not depend on them.
 ## Troubleshooting
 
 - **"Terminals are unavailable"**: node-pty's native binary did not load for this Electron version. Run `npx @electron/rebuild -f -w node-pty` in this folder (needs Visual Studio Build Tools with the C++ workload, present on this machine).
+- Long messages arriving without their beginning: Claude Code's Windows TUI keeps only the last 1024-byte ConPTY chunk of a single write, so the composer, inbox answers and pastes into a terminal are written in 512-byte slices with a 25 ms gap (`writeText` in `renderer/app.js`).
+- `test/pty-paste-harness.js` checks that against a real TUI. It is manual and costs a few haiku turns: `ELECTRON_RUN_AS_NODE=1 npx electron test/pty-paste-harness.js [trusted-folder]`. It prints INTACT/TRUNCATED per case and deletes the session transcript it made.
 - Blank sidebar: no sessions seen yet on this machine; add a folder, or expand **Idle** if projects are only remembered.
 - The old terminal-only dashboard remains at `C:\Users\chris\.claude\mission-control\mission-control.cmd`.
