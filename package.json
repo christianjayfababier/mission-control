@@ -46,6 +46,7 @@
       "transcripts.js",
       "integrations.js",
       "boards.js",
+      "chat.js",
       "rules.js",
       "explorer.js",
       "prwatch.js",

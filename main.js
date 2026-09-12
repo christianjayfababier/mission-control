@@ -23,6 +23,7 @@ const { Secrets, electronEncryptor } = require('./secrets');
 const newproject = require('./newproject-lib');
 const updater = require('./updater');
 const diag = require('./diag');
+const { ChatService } = require('./chat');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
@@ -131,7 +132,23 @@ const checkpoints = new CheckpointWriter(watcher, {
   projRoot: PROJ_DIR_ROOT,
   context: (p) => { const k = keyOf(p); const s = settings.get(p); const g = gitCache.get(k); const pr = prCache.get(k); const repo = parseRepo(s.repo || (g && g.remote)); return { board: boards.load(p), notes: notes.forProject(p), inflight: repo ? prwatch.inflight(repo.full) : [], repo, account: (pr && pr.account) || s.ghAccount || null, branch: g && g.branch, settings: s }; },
 });
-const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json'), onNote: (p, text) => checkpoints.journal(p, `PR watch · ${text}`) });
+const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json'), onNote: (p, text) => { checkpoints.journal(p, `PR watch · ${text}`); chat.event(p, text); } });
+// ── team chat (docs/TEAM-CHAT-CONTRACT.md, T-027): the project's AI colleagues talking among themselves.
+// Everything it needs arrives as a callback, so chat.js never reaches into the registry, the secrets or
+// the window. It runs only while a project's chat is enabled *and* its panel is visible.
+const CHAT_FIXTURE = process.env.MC_CHAT_FIXTURE || null;
+const chat = new ChatService({
+  dir: path.join(DATA_DIR, 'chat'),
+  getSettings: (p) => settings.get(p).chat,
+  setSettings: (p, next) => settings.set(p, { chat: next }),
+  listProjects: () => Object.values(settings.data || {}).map((x) => x && x.path).filter(Boolean),
+  boardOf: (p) => boards.load(p),
+  memDirOf: (p) => path.join(PROJ_DIR_ROOT, checkpoints.slugFor(p), 'memory'),
+  readyOf: (id) => { try { return providers.readiness(providers.byId(id), providers.cachedStatus(secrets.info())[id], false).ready; } catch { return null; } },
+  envOf: (p) => providers.assembleEnv({ base: process.env, secrets: secrets.map(), projectSettings: settings.get(p), globalSettings: globalSettings() }),
+  send: (payload) => { if (win && !win.isDestroyed()) win.webContents.send('chat', payload); },
+  hasWindow: () => !!(win && !win.isDestroyed()),
+});
 const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
 let runningWorkers = 0;   // last snapshot's total; the updater refuses to restart while a worker is mid-task (T-028)
@@ -199,7 +216,19 @@ function snapshot() {
   const workersBefore = runningWorkers;
   runningWorkers = full.projects.reduce((n, p) => n + (p.running || 0), 0);
   if (runningWorkers !== workersBefore) updaterCountsChanged();   // the restart chip must not show a stale count
+  noteFinishedWorkers(full);
   return full;
+}
+// A project's running count falling is a worker that just finished — the one worker event the team chat
+// gets, taken from the snapshot rather than from a second watcher.
+const lastRunning = new Map();
+function noteFinishedWorkers(snap) {
+  for (const p of snap.projects) {
+    if (!p.path) continue;
+    const k = keyOf(p.path); const was = lastRunning.get(k); const now = p.running || 0;
+    lastRunning.set(k, now);
+    if (was !== undefined && now < was) chat.event(p.path, `a worker just finished (${now} still running)`);
+  }
 }
 function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', snapshot()); }
 // git remotes/branches and open PRs for projects that matter right now (active in the last 12 h or pinned)
@@ -282,7 +311,7 @@ function journalBoardDiff(b) {
   const k = keyOf(b.project); const prev = boardSeen.get(k);
   const cur = { tickets: new Map(b.tickets.map((t) => [t.id, t.status])), todos: new Map(b.todos.map((t) => [t.id, !!t.done])) };
   if (prev) {
-    for (const t of b.tickets) { const was = prev.tickets.get(t.id); if (was === undefined) checkpoints.journal(b.project, `board · ticket added ${t.id} [${t.status}] ${t.title}${t.risk ? ' · risk ' + t.risk : ''}`); else if (was !== t.status) checkpoints.journal(b.project, `board · ${t.id} ${was} → ${t.status}: ${t.title}${t.pr ? ' · ' + t.pr : ''}`); }
+    for (const t of b.tickets) { const was = prev.tickets.get(t.id); if (was === undefined) { checkpoints.journal(b.project, `board · ticket added ${t.id} [${t.status}] ${t.title}${t.risk ? ' · risk ' + t.risk : ''}`); chat.event(b.project, `a new ticket appeared: ${t.id} ${t.title}`); } else if (was !== t.status) { checkpoints.journal(b.project, `board · ${t.id} ${was} → ${t.status}: ${t.title}${t.pr ? ' · ' + t.pr : ''}`); chat.event(b.project, `${t.id} moved ${was} → ${t.status}: ${t.title}`); } }
     for (const t of b.todos) { const was = prev.todos.get(t.id); if (was === undefined) checkpoints.journal(b.project, `board · todo added ${t.id} ${t.text} (${t.owner})`); else if (was !== !!t.done) checkpoints.journal(b.project, `board · todo ${t.id} ${t.done ? 'done' : 'reopened'}: ${t.text}`); }
   }
   boardSeen.set(k, cur);
@@ -298,6 +327,33 @@ ipcMain.handle('board:get', (_e, p) => boards.load(p));
 ipcMain.handle('board:add', (_e, { path: p, kind, items }) => { checkpoints.journal(p, `board · owner added ${items.length} ${kind}${items.length === 1 ? '' : 's'}: ${items.map((i) => typeof i === 'string' ? i : i.title).join('; ').slice(0, 200)}`); return kind === 'todo' ? boards.addTodos(p, items, 'owner') : boards.addTickets(p, items, 'owner'); });
 ipcMain.handle('board:patch', (_e, { path: p, kind, id, patch }) => { const b = boards.patch(p, kind, id, patch); const it = (kind === 'todo' ? b.todos : b.tickets).find((x) => x.id === id); if (it && (patch.status || patch.done !== undefined)) checkpoints.journal(p, `board · owner marked ${id} ${patch.status || (patch.done ? 'done' : 'reopened')}: ${it.title || it.text}`); return b; });
 ipcMain.handle('board:remove', (_e, { path: p, kind, id }) => boards.remove(p, kind, id));
+
+// ── team chat (docs/TEAM-CHAT-CONTRACT.md). Read-only: the panel draws what the agents said and the
+// human decides what, if anything, reaches the lead. Nothing here can throw across IPC.
+ipcMain.handle('chat:get', (_e, p) => { try { return chat.payload(p, { fixtureFile: CHAT_FIXTURE }); } catch (e) { console.error('chat:get', e && e.message); return { settings: null, roster: [], messages: [], caps: { agent: {}, today: 0 }, error: String(e && e.message || e) }; } });
+ipcMain.handle('chat:set', (_e, { path: p, patch } = {}) => {
+  try {
+    const before = chat.get(p);
+    if (patch && patch.add) { chat.addAgent(p, patch.add); checkpoints.journal(p, `team chat · owner added ${patch.add}`); }
+    else if (patch && patch.remove) { chat.removeAgent(p, patch.remove); }
+    else chat.set(p, patch || {});
+    const after = chat.get(p);
+    if (before.enabled !== after.enabled) checkpoints.journal(p, `team chat · owner switched the chat ${after.enabled ? 'on' : 'off'}`);
+    return chat.payload(p, { fixtureFile: CHAT_FIXTURE });
+  } catch (e) { console.error('chat:set', e && e.message); return { error: String(e && e.message || e) }; }
+});
+ipcMain.handle('chat:forwarded', (_e, { path: p, id } = {}) => { try { const m = chat.store.forwarded(p, id); if (m) checkpoints.journal(p, `team chat · owner sent ${m.name}'s ${m.kind} to the lead: ${String(m.text).slice(0, 160)}`); return { ok: !!m }; } catch (e) { return { ok: false, error: String(e && e.message || e) }; } });
+ipcMain.handle('chat:clear', (_e, p) => { try { return chat.store.clear(p); } catch (e) { return { ok: false, error: String(e && e.message || e) }; } });
+// Not in the contract's table, but the panel cannot ask for an Ollama model without it: the installed
+// local models, parsed from `ollama list`. Empty list when Ollama is not installed.
+ipcMain.handle('chat:candidates', async (_e, p) => {
+  try {
+    const out = { agents: chat.candidates(p), ollama: [] };
+    const bin = providers.which('ollama');
+    if (bin) { const r = await providers.run(bin, ['list'], { timeout: 8000 }); out.ollama = require('./chat').parseOllamaList(r.stdout); }
+    return out;
+  } catch (e) { return { agents: [], ollama: [], error: String(e && e.message || e) }; }
+});
 
 // ── owner rules per project (docs/RULES-CONTRACT.md). The same file is written by kit/mc-board.js.
 ipcMain.handle('rules:get', (_e, p) => rules.load(p));
@@ -406,7 +462,7 @@ ipcMain.handle('notes:answer', (_e, { id, answer }) => {
 });
 // the orchestrator's own notes reach the journal when they appear in notes.jsonl
 let journaledNotes = new Set();
-setInterval(() => { for (const n of notes.open()) { if (journaledNotes.has(n.id)) continue; journaledNotes.add(n.id); if (n.source !== 'mission-control') checkpoints.journal(n.project, `inbox · orchestrator posted ${n.type} "${n.title}"`, new Date(n.ts).getTime()); } if (journaledNotes.size > 5000) journaledNotes = new Set([...journaledNotes].slice(-2000)); }, 3000);
+setInterval(() => { for (const n of notes.open()) { if (journaledNotes.has(n.id)) continue; journaledNotes.add(n.id); if (n.source !== 'mission-control') { checkpoints.journal(n.project, `inbox · orchestrator posted ${n.type} "${n.title}"`, new Date(n.ts).getTime()); chat.event(n.project, `the lead posted a ${n.type} in the owner's inbox: "${n.title}"`); } } if (journaledNotes.size > 5000) journaledNotes = new Set([...journaledNotes].slice(-2000)); }, 3000);
 ipcMain.handle('notes:dismiss', (_e, { id }) => { if (notes.get(id)) { notes.append({ kind: 'dismiss', id, ts: new Date().toISOString() }); sendSnapshot(); } return true; });
 
 // ── lead launch: rules + the owner's additions + this project's context, in one file for --append-system-prompt-file
@@ -651,6 +707,6 @@ ipcMain.handle('update:state', () => (updates ? updates.state() : { state: 'disa
 ipcMain.handle('update:check', () => (updates ? updates.check() : { state: 'disabled', reason: 'not started' }));
 ipcMain.handle('update:install', (_e, opts) => (updates ? updates.installNow(opts || {}) : { error: 'the updater is not running' }));
 
-app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); startUpdater(); setTimeout(() => refreshIntegrations(true), 1500); });
-app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); if (updates) updates.stop(); diagnostics.stop(); app.quit(); });
+app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); startUpdater(); chat.start(); setTimeout(() => refreshIntegrations(true), 1500); });
+app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); chat.stop(); if (updates) updates.stop(); diagnostics.stop(); app.quit(); });
 app.on('before-quit', () => { killAllPtys(); });
