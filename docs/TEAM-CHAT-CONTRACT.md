@@ -106,3 +106,11 @@ Rich personas beyond name, avatar and specialty come later if the owner enjoys i
 Owner turns the chat on for MissionControl, adds Gemini and Ollama, sees a greeting round within five minutes, hides the
 panel and sees no further messages, shows it and sees the chat resume, clicks Send to lead on a suggestion and finds it in
 the composer; the day's count never passes the cap; `npm test` green; screenshots `--view chat`.
+
+## As built (reviewed by Skye, 2026-09-13)
+
+- Caps: `capPerAgentPerHour` (default 6) plus a per-provider override map `capPerAgent` (default `{ claude: 4 }`), because Claude is the one agent spending the owner's Claude plan. A capped agent shows "resting".
+- Roster gate: candidates are limited to providers enabled for the project in AI Collaboration; a roster member disabled later stays listed, is marked "disabled in AI Collaboration" and never speaks.
+- Extra IPC `chat:candidates` (joinable agents and the Ollama model list); `chat:set` takes `add`/`remove` so main writes the "joined the chat" system line; `RosterRow` carries a persona `seed` and the renderer draws the avatar with persona.js; `afterId` and roster pushes are not implemented (the whole bounded history is returned).
+- Events: "worker finished" is derived from a project's running count dropping in the snapshot.
+- Proven on this machine: one real round through the scheduler with the Claude persona (haiku), hide stops (no round, no store created), fixture screenshot at 320 px. Gemini, Codex and Ollama paths are code-complete but unexercised here (not installed or not logged in).
