@@ -1,0 +1,66 @@
+# Changelog
+
+All notable changes to Mission Control. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the versions are [semantic](https://semver.org/spec/v2.0.0.html).
+
+A version ships when the owner publishes the draft GitHub release that pushing the tag `vX.Y.Z` created;
+installed copies pick it up from `latest.yml` in that release within four hours.
+
+## [Unreleased]
+
+## [0.2.0] - 2026-09-12
+
+The first version that can replace itself, and the first with a settings dialog.
+
+### Added
+
+- Auto-update from GitHub Releases: the app checks on start and every four hours, downloads in the
+  background and offers **Update ready: restart to install** in the header. It never restarts on its own,
+  and it refuses to restart while a terminal is open or a worker is running. **Settings > About** has a
+  **Check for updates** button and the last result (T-022).
+- **Add/create a project** in three modes: pick an existing folder, make a new one with `git init` and a
+  starter `CLAUDE.md`, or clone a GitHub repository in a terminal you can watch
+  ([#11](https://github.com/christianjayfababier/mission-control/pull/11), T-025).
+- **Settings** behind the cog: **Accounts & AI** with eleven AI tools and eight API keys (encrypted with
+  Windows DPAPI via `safeStorage`, exported per terminal), **Global rules**, **Hidden projects** and
+  **About & diagnostics**; per-project **AI Collaboration** toggles
+  ([#10](https://github.com/christianjayfababier/mission-control/pull/10), T-019).
+- A per-user NSIS installer built by `npm run dist`, and a release workflow triggered by pushing a tag
+  ([#9](https://github.com/christianjayfababier/mission-control/pull/9), T-021).
+- **Rules**: repo rule files, the rulebook and per-project owner rules, injected into the lead's prompt
+  ([#6](https://github.com/christianjayfababier/mission-control/pull/6), T-013, T-014, T-015).
+- **Explorer**: the file tree with git marks and worker pills, and a Branches view
+  ([#5](https://github.com/christianjayfababier/mission-control/pull/5), T-010, T-011, T-012).
+- The sidebar remembers every project a session was ever seen in, grouped Active and Idle, and detects a
+  worker that can be resumed ([#3](https://github.com/christianjayfababier/mission-control/pull/3),
+  T-005, T-006).
+- **Recall** and **Handover** replace standup and wrapup in the orchestrator kit, with the worker-reuse
+  rule and the repo scaffold ([#2](https://github.com/christianjayfababier/mission-control/pull/2),
+  T-004, T-008).
+- A smoke test that boots the app in screenshot mode and fails on any renderer error
+  ([#1](https://github.com/christianjayfababier/mission-control/pull/1), T-007).
+
+### Fixed
+
+- The packaged app could not start: `providers.js`, `secrets.js`, `globalsettings.js` and
+  `newproject-lib.js` arrived in the app but were never added to the electron-builder file list, so an
+  installed Mission Control threw `Cannot find module './providers'` at the first require and never drew a
+  window. A unit check now fails when a module `main.js` or `preload.js` requires is not packaged (T-022).
+- Long composer messages, inbox answers and pastes reached Claude Code without their beginning: Windows
+  ConPTY keeps only the last 1024-byte chunk of a single write, so text now goes out in 512-byte slices
+  ([#8](https://github.com/christianjayfababier/mission-control/pull/8), T-018).
+- Renderer overflow: the PR strip wraps and stays inside the window, and sidebar rows and inbox cards no
+  longer overflow ([#7](https://github.com/christianjayfababier/mission-control/pull/7), T-016, T-017).
+- PR watch called a merge blocked when its workflow run had merely been cancelled by a newer push; a
+  cancelled run is now *superseded*, not failed
+  ([#4](https://github.com/christianjayfababier/mission-control/pull/4), T-009).
+
+## [0.1.0] - 2026-09-11
+
+The first packaged Mission Control: projects and their terminals in one window, the orchestrator kit, the
+inbox, boards, PR watch and the memory writer. Installed by hand from `Mission-Control-Setup-0.1.0.exe`;
+this version has no auto-update, so 0.2.0 has to be installed over it by hand as well.
+
+[Unreleased]: https://github.com/christianjayfababier/mission-control/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/christianjayfababier/mission-control/releases/tag/v0.2.0
+[0.1.0]: https://github.com/christianjayfababier/mission-control/releases/tag/v0.1.0

@@ -6,7 +6,8 @@ Built 2026-09-11. Electron + xterm.js + node-pty, no bundler, no framework.
 
 ## Install
 
-Download `Mission-Control-Setup-<version>.exe` from the release and run it. It installs **per user**, with
+Download `Mission-Control-Setup-<version>.exe` from
+<https://github.com/christianjayfababier/mission-control/releases> and run it. It installs **per user**, with
 no administrator prompt, into `%LOCALAPPDATA%\Programs\mission-control` (the installer lets you pick a
 different directory) and adds a **Mission Control** Start Menu shortcut. Uninstall from Settings -> Apps,
 or with `Uninstall Mission Control.exe` in the install directory.
@@ -23,6 +24,21 @@ your PC*: choose **More info -> Run anyway**. It asks once per version, not once
 
 Settings, projects, boards and the orchestrator kit live in `~/.claude/mission-control` and are untouched
 by install, upgrade and uninstall.
+
+## Updates
+
+From 0.2.0 the app updates itself from the same releases page. It asks GitHub 20 seconds after start and
+every four hours after that, downloads a newer installer in the background, and then waits: a chip in the
+project header says **Update <version> ready: restart to install**, and only a click on it restarts the
+app and installs. Mission Control never restarts on its own, and it refuses the restart while a terminal
+is open or a worker is running -- the download stays on disk until the machine is quiet. **Settings ->
+About & diagnostics** has a **Check for updates** button and the last result, so a check never has to wait
+for the timer.
+
+What ships an update is *publishing* the draft release: the tag `vX.Y.Z` builds the installer and opens a
+**draft**, and installed copies see nothing until someone publishes it. The feed is `latest.yml`, uploaded
+next to the exe; a release published without that file offers nobody anything. 0.1.0 has no updater, so
+0.2.0 has to be installed over it by hand once.
 
 ## Launch
 
@@ -103,9 +119,12 @@ rules.js         owner-rules store, repo rule-file discovery, the viewer's sandb
 explorer.js      git-backed file tree, status, branches and branch diffs for the Explorer panel
 kit/orchestrator-system.md  default orchestrator rules, copied to ~/.claude/mission-control/ on first run
 preload.js       contextBridge API (window.mc)
+updater.js       auto-update: a pure state machine plus the electron-updater wiring; disabled unless packaged
 renderer/        index.html, app.js (work view), memory.js (memory graph), styles.css (vanilla JS + xterm.js)
 Mission Control.cmd   launcher
 build/make-icon.js    draws build/icon.ico for the installer; dependency-free, re-run after editing it
+build/check-version.js  the release guard: the pushed tag must name the version in package.json
+CHANGELOG.md     what shipped in each version, newest first
 ```
 
 State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds).
@@ -142,14 +161,19 @@ Three settings there are deliberate:
   `node_modules/node-pty/prebuilds/win32-x64` that load under both Node and Electron, and its npm tarball
   does not carry the winpty C++ sources, so a from-source rebuild fails on every machine including CI.
   There is nothing to rebuild.
-- `publish: null` -- this app ships no auto-update yet. Without it electron-builder tries to infer a
-  publish provider from the git remote and then fails while writing update metadata.
+- `publish` -- the GitHub provider, `christianjayfababier/mission-control`. It is what makes
+  electron-builder write `latest.yml` next to the exe and bake `app-update.yml` into the package, which is
+  the whole of what `electron-updater` reads. `npm run dist` still passes no `--publish`: the build never
+  uploads anything, the release workflow does.
 - `asarUnpack` -- node-pty's `.node` binaries, `winpty.dll`, `winpty-agent.exe` and the conpty
   `OpenConsole.exe` have to sit on disk outside the asar or Windows cannot load them.
 
-Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` on windows-latest: `npm ci`, `npm run dist`,
-the exe uploaded as a workflow artifact, then a **draft** GitHub release created with the exe and the
-blockmap attached. It stays a draft until someone publishes it by hand.
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` on windows-latest: `node
+build/check-version.js` first (the tag has to name the version in `package.json`, or the update feed would
+advertise a download that does not exist), then `npm ci`, `npm run dist`, the exe, the blockmap and
+`latest.yml` uploaded as a workflow artifact, then a **draft** GitHub release created with all three
+attached. It stays a draft until someone publishes it by hand -- and publishing it is what hands the
+update to every installed copy.
 
 ## Troubleshooting
 
@@ -157,4 +181,4 @@ blockmap attached. It stays a draft until someone publishes it by hand.
 - Long messages arriving without their beginning: Claude Code's Windows TUI keeps only the last 1024-byte ConPTY chunk of a single write, so the composer, inbox answers and pastes into a terminal are written in 512-byte slices with a 25 ms gap (`writeText` in `renderer/app.js`).
 - `test/pty-paste-harness.js` checks that against a real TUI. It is manual and costs a few haiku turns: `ELECTRON_RUN_AS_NODE=1 npx electron test/pty-paste-harness.js [trusted-folder]`. It prints INTACT/TRUNCATED per case and deletes the session transcript it made.
 - Blank sidebar: no sessions seen yet on this machine; add a folder, or expand **Idle** if projects are only remembered.
-- The old terminal-only dashboard remains at `C:\Users\chris\.claude\mission-control\mission-control.cmd`.
+- The old terminal-only dashboard remains at `%USERPROFILE%\.claude\mission-control\mission-control.cmd`.
