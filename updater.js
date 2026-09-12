@@ -11,22 +11,32 @@
    `require('electron')` is a path string and the adapter would throw), points it at the GitHub release
    feed electron-builder baked into `app-update.yml`, and pushes every state change to the renderer.
 
-   Busy means "the owner is in the middle of something": a terminal is open or a worker is running.
-   We never restart under those, so `installNow()` refuses while `isBusy()` is true -- the download is
-   already on disk, the restart just waits for a quiet moment. `autoInstallOnAppQuit` is off for the
-   same reason: closing the window must not silently swap the app out.  */
+   Busy means "a worker is mid-task" and nothing else (T-028). An open terminal never blocks the
+   restart: quitting kills terminals anyway and a Claude session is resumable, while a worker that is
+   running has unfinished work. The counts travel in the payload (`workers`, `terminals`) so the
+   renderer can say what a restart costs, and `installNow({ force: true })` is the owner overruling
+   the running workers on purpose. `autoInstallOnAppQuit` stays off: closing the window must not
+   silently swap the app out.
+
+   `MC_UPDATE_FAKE_READY=<version>` puts an *unpackaged* run into `ready` for that version so the
+   chip and the confirmation dialog can be proved in development. It never downloads and never
+   restarts: `installNow()` there answers `{ error: 'not packaged' }`.  */
 
 const CHECK_DELAY_MS = 20 * 1000;             // after startup: let the sessions and probes settle first
 const CHECK_EVERY_MS = 4 * 60 * 60 * 1000;    // and every four hours after that
 
 const STATES = ['disabled', 'idle', 'checking', 'available', 'downloading', 'ready', 'error'];
 
+/** A counter option that may be missing: always a whole number >= 0, never NaN. */
+const counter = (fn) => (typeof fn === 'function' ? () => Math.max(0, Math.round(Number(fn()) || 0)) : () => 0);
+
 class UpdaterState {
-  /** @param {{current?: string, packaged?: boolean, isBusy?: () => boolean, onChange?: (s: object) => void, log?: (...a: any[]) => void}} opts */
+  /** @param {{current?: string, packaged?: boolean, runningWorkers?: () => number, openTerminals?: () => number, onChange?: (s: object) => void, log?: (...a: any[]) => void}} opts */
   constructor(opts = {}) {
     this.current = String(opts.current || '0.0.0');
     this.packaged = !!opts.packaged;
-    this.isBusy = typeof opts.isBusy === 'function' ? opts.isBusy : () => false;
+    this.runningWorkers = counter(opts.runningWorkers);   // busy is this one, and only this one
+    this.openTerminals = counter(opts.openTerminals);     // reported so the owner sees what closing costs
     this.onChange = typeof opts.onChange === 'function' ? opts.onChange : () => {};
     this.log = typeof opts.log === 'function' ? opts.log : (...a) => console.log('updater', ...a);
     this.state = this.packaged ? 'idle' : 'disabled';
@@ -37,13 +47,16 @@ class UpdaterState {
     this.checkedAt = 0;       // ms epoch of the last answered check; 0 = never checked
   }
 
-  /** The payload the renderer and the IPC handlers see. `busy` is asked fresh every time. */
+  /** Busy = at least one worker is running. Terminals are counted, never a blocker (T-028). */
+  isBusy() { return this.runningWorkers() > 0; }
+
+  /** The payload the renderer and the IPC handlers see. The counts are asked fresh every time. */
   snapshot() {
-    const busy = !!this.isBusy();
+    const workers = this.runningWorkers(), terminals = this.openTerminals(), busy = workers > 0;
     return {
       state: this.state, reason: this.reason, current: this.current, version: this.version,
       percent: this.percent, error: this.error, checkedAt: this.checkedAt,
-      busy, canInstall: this.state === 'ready' && !busy,
+      busy, workers, terminals, canInstall: this.state === 'ready' && !busy,
     };
   }
 
@@ -58,7 +71,7 @@ class UpdaterState {
     if ('error' in patch) this.error = patch.error;
     if ('checkedAt' in patch) this.checkedAt = patch.checkedAt;
     const s = this.snapshot();
-    this.log(`${from} -> ${state}` + (s.version ? ` v${s.version}` : '') + (state === 'downloading' ? ` ${s.percent}%` : '') + (s.error ? ` error=${s.error}` : '') + (s.busy ? ' (busy)' : ''));
+    this.log(`${from} -> ${state}` + (s.version ? ` v${s.version}` : '') + (state === 'downloading' ? ` ${s.percent}%` : '') + (s.error ? ` error=${s.error}` : '') + (s.busy ? ` (${s.workers} workers running)` : ''));
     this.onChange(s);
     return s;
   }
@@ -77,38 +90,70 @@ class UpdaterState {
     return this.to('error', { error: text });
   }
 
-  /** Why `installNow()` would refuse right now, or null when it may go ahead. */
-  installBlocker() {
+  /**
+   * Why `installNow()` would refuse right now, or null when it may go ahead.
+   * @param {boolean} [force] the owner said "restart anyway": running workers stop being a blocker.
+   */
+  installBlocker(force) {
     if (this.state === 'disabled') return 'updates are disabled: ' + (this.reason || 'not packaged');
     if (this.state !== 'ready') return 'no update is ready';
-    if (this.isBusy()) return 'sessions are running';
+    const workers = this.runningWorkers();
+    if (workers > 0 && !force) return `${workers} worker${workers === 1 ? ' is' : 's are'} still running`;
     return null;
   }
 }
 
 /**
  * Wire electron-updater to an UpdaterState and return the handle main.js keeps.
- * @param {{app: object, isBusy?: () => boolean, send?: (s: object) => void, autoUpdater?: object}} deps
+ * @param {{app: object, runningWorkers?: () => number, openTerminals?: () => number, send?: (s: object) => void, autoUpdater?: object, fakeReady?: string}} deps
  */
 function start(deps = {}) {
   const app = deps.app;
   const send = typeof deps.send === 'function' ? deps.send : () => {};
   const log = (...a) => console.log('updater', ...a);
+  const packaged = !!(app && app.isPackaged);
+  // development-only fixture: prove the chip and the restart dialog without a release to download
+  const fakeReady = packaged ? null : String(deps.fakeReady || process.env.MC_UPDATE_FAKE_READY || '') || null;
   const st = new UpdaterState({
     current: (app && app.getVersion && app.getVersion()) || '0.0.0',
-    packaged: !!(app && app.isPackaged),
-    isBusy: deps.isBusy,
+    packaged: packaged || !!fakeReady,
+    runningWorkers: deps.runningWorkers,
+    openTerminals: deps.openTerminals,
     onChange: send,
     log,
   });
   let timer = null, interval = null, au = deps.autoUpdater || null;
+
+  /** One line per attempt, whatever the answer is: the log has to show the owner did ask. */
+  function logAttempt(force) {
+    const s = st.snapshot();
+    log(`install requested for ${s.version || 'nothing'}: ${s.workers} worker${s.workers === 1 ? '' : 's'} running, ${s.terminals} terminal${s.terminals === 1 ? '' : 's'} open${force ? ', forced' : ''}`);
+    if (force && s.workers > 0) log(`install forced with ${s.workers} worker${s.workers === 1 ? '' : 's'} running`);
+    return s;
+  }
+
+  if (fakeReady) {
+    log(`MC_UPDATE_FAKE_READY=${fakeReady}: pretending that version is downloaded (unpackaged run — no download, no restart)`);
+    st.downloaded(fakeReady);
+    return {
+      state: () => st.snapshot(),
+      check: () => st.snapshot(),
+      installNow(opts) {
+        logAttempt(!!(opts && opts.force));
+        log('install refused: not packaged');
+        return { error: 'not packaged' };
+      },
+      stop: () => {},
+      _state: st,
+    };
+  }
 
   if (!st.packaged) {
     log('disabled: not packaged (a development run never updates itself)');
     return {
       state: () => st.snapshot(),
       check: () => st.snapshot(),
-      installNow: () => ({ error: st.installBlocker() }),
+      installNow: (opts) => { logAttempt(!!(opts && opts.force)); const error = st.installBlocker(!!(opts && opts.force)); log('install refused: ' + error); return { error }; },
       stop: () => {},
       _state: st,
     };
@@ -129,7 +174,7 @@ function start(deps = {}) {
   } catch (e) {
     log('could not load electron-updater: ' + (e && e.message));
     st.failed(e);
-    return { state: () => st.snapshot(), check: () => st.snapshot(), installNow: () => ({ error: 'the updater failed to load' }), stop: () => {}, _state: st };
+    return { state: () => st.snapshot(), check: () => st.snapshot(), installNow: () => { log('install refused: the updater failed to load'); return { error: 'the updater failed to load' }; }, stop: () => {}, _state: st };
   }
 
   /** Ask GitHub. Never throws: a check that cannot reach the network is an `error` state, not a crash. */
@@ -146,12 +191,14 @@ function start(deps = {}) {
   return {
     state: () => st.snapshot(),
     check,
-    installNow() {
-      const blocker = st.installBlocker();
+    installNow(opts) {
+      const force = !!(opts && opts.force);
+      logAttempt(force);
+      const blocker = st.installBlocker(force);
       if (blocker) { log('install refused: ' + blocker); return { error: blocker }; }
       log('installing ' + st.version + ' and restarting');
       try { au.quitAndInstall(false, true); return { ok: true }; }
-      catch (e) { st.failed(e); return { error: String((e && e.message) || e) }; }
+      catch (e) { log('install failed: ' + String((e && e.message) || e)); st.failed(e); return { error: String((e && e.message) || e) }; }
     },
     stop() { if (timer) clearTimeout(timer); if (interval) clearInterval(interval); timer = interval = null; },
     _state: st,

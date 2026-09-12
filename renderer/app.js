@@ -592,7 +592,7 @@ function renderPrStrip(p) {
 // ───────────── auto-update (T-022, updater.js in the main process)
 // One chip left of the Work/Memory switch. It is not a progress bar and not a nag: it is hidden while
 // there is nothing to say, and the only thing it ever asks for is the moment to restart.
-const BUSY_TEXT = 'Close terminals and wait for workers first';
+const BUSY_TEXT = 'Workers are still running — you can restart anyway';
 let updateState = null;
 function updateLabel(u) {
   if (!u) return '';
@@ -612,18 +612,60 @@ function renderUpdateChip() {
   chip.classList.toggle('ready', ready);
   chip.classList.toggle('busy', ready && !!u.busy);
   chip.classList.toggle('working', u.state === 'checking' || u.state === 'downloading' || u.state === 'available');
-  chip.title = ready ? (u.busy ? BUSY_TEXT : `Restart Mission Control now and install ${u.version}.`)
+  chip.title = ready ? (u.busy ? BUSY_TEXT : `Restart Mission Control now and install ${u.version}.` + (u.terminals ? ` ${u.terminals} open terminal${u.terminals === 1 ? '' : 's'} will close.` : ''))
     : u.state === 'checking' ? `Asking GitHub Releases whether anything is newer than ${u.current}.`
       : 'Downloading in the background. Mission Control never restarts on its own; it offers the restart here.';
   if (note && !ready) { note.textContent = ''; note.hidden = true; }   // a stale refusal must not outlive the state it came from
 }
-// Never alert() from here: the renderer's blocking dialogs freeze the terminals behind them.
-$('#update-chip').onclick = async () => {
-  const note = $('#update-note'); if (!updateState || updateState.state !== 'ready') return;
-  const r = await window.mc.updateInstall();
-  if (r && r.error && note) { note.textContent = r.error === 'sessions are running' ? BUSY_TEXT : r.error; note.hidden = false; }
+// The restart confirmation (T-028). Never alert()/confirm() from here: the renderer's blocking dialogs
+// freeze the terminals behind them, so this is a <dialog> like every other one. The chip asks, it never
+// refuses: terminals close on a restart and Claude sessions resume, and running workers are the owner's
+// call to make — "Restart anyway" is there, only as the quieter of the two buttons.
+function updateDialogText(u) {
+  const v = u.version || 'the update';
+  const t = u.terminals || 0, w = u.workers || 0;
+  const terms = t ? `${t} open terminal${t === 1 ? '' : 's'} will close; Claude sessions can be resumed afterwards.` : 'No terminals are open.';
+  if (w) return `Restart to install ${v}? ${w} worker${w === 1 ? ' is' : 's are'} still running; wait for ${w === 1 ? 'it' : 'them'} or restart anyway. ${terms}`;
+  return `Restart to install ${v}? ${terms}`;
+}
+function renderUpdateDialog() {
+  const dlg = $('#dlg-update'); if (!dlg) return;
+  const u = updateState || {}, busy = (u.workers || 0) > 0;
+  const text = $('#dlg-update-text'); if (text) text.textContent = updateDialogText(u);
+  const go = $('#update-go'), later = $('#update-later');
+  if (go) { go.textContent = busy ? 'Restart anyway' : 'Restart now'; go.className = busy ? 'btn' : 'btn primary'; }
+  if (later) later.className = busy ? 'btn primary' : 'btn';
+}
+$('#update-chip').onclick = () => {
+  if (!updateState || updateState.state !== 'ready') return;
+  const dlg = $('#dlg-update'); if (!dlg) return;
+  const err = $('#dlg-update-error'); if (err) { err.textContent = ''; err.hidden = true; }
+  const note = $('#update-note'); if (note) { note.textContent = ''; note.hidden = true; }
+  renderUpdateDialog();
+  dlg.showModal();
 };
-window.mc.onUpdate((u) => { updateState = u; renderUpdateChip(); if (window.Settings && window.Settings.onUpdate) window.Settings.onUpdate(u); });
+const updateLater = $('#update-later'); if (updateLater) updateLater.onclick = () => $('#dlg-update').close();
+const updateGo = $('#update-go');
+if (updateGo) updateGo.onclick = async () => {
+  const err = $('#dlg-update-error'), note = $('#update-note');
+  updateGo.disabled = true;
+  try {
+    // force only when workers are running: that is the one refusal the owner is overruling here
+    const r = await window.mc.updateInstall({ force: (updateState && updateState.workers || 0) > 0 });
+    if (r && r.error) {
+      if (err) { err.textContent = r.error; err.hidden = false; }
+      if (note) { note.textContent = r.error; note.hidden = false; }
+    } else $('#dlg-update').close();   // the app is quitting; closing keeps the last frame honest
+  } catch (e) {
+    if (err) { err.textContent = String((e && e.message) || e); err.hidden = false; }
+  } finally { updateGo.disabled = false; }
+};
+window.mc.onUpdate((u) => {
+  updateState = u; renderUpdateChip();
+  const dlg = $('#dlg-update');
+  if (dlg && dlg.open) { if (u.state === 'ready') renderUpdateDialog(); else dlg.close(); }   // counts never go stale under the owner's hand
+  if (window.Settings && window.Settings.onUpdate) window.Settings.onUpdate(u);
+});
 window.mc.updateState().then((u) => { updateState = u; renderUpdateChip(); }).catch(() => {});
 
 // ───────────── crash evidence (T-024, diag.js in the main process)

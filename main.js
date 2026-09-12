@@ -134,7 +134,7 @@ const checkpoints = new CheckpointWriter(watcher, {
 const prwatch = new PrWatch({ github, notes, boards, file: path.join(DATA_DIR, 'prwatch.json'), onNote: (p, text) => checkpoints.journal(p, `PR watch · ${text}`) });
 const ptys = new Map(); // id -> { proc, cwd, projectKey }
 let ptySeq = 0;
-let runningWorkers = 0;   // last snapshot's total; the updater refuses to restart while anything is running
+let runningWorkers = 0;   // last snapshot's total; the updater refuses to restart while a worker is mid-task (T-028)
 
 function registry() { const r = readJson(REGISTRY, []); return Array.isArray(r) ? r : []; }
 
@@ -196,7 +196,9 @@ function snapshot() {
   const hid = hiddenSet();
   snap.projects = snap.projects.filter((p) => p.pinned || !hid.has(norm(p.path))); // "Hide" only applies to unpinned projects
   const full = enrich(snap);
+  const workersBefore = runningWorkers;
   runningWorkers = full.projects.reduce((n, p) => n + (p.running || 0), 0);
+  if (runningWorkers !== workersBefore) updaterCountsChanged();   // the restart chip must not show a stale count
   return full;
 }
 function sendSnapshot() { if (win && !win.isDestroyed()) win.webContents.send('snapshot', snapshot()); }
@@ -589,9 +591,11 @@ async function spawnPty({ cwd, cols, rows, shellPath, provider = null, account: 
   const env = providers.assembleEnv({ base, secrets: secrets.map(), projectSettings: s, globalSettings: globalSettings() });
   const proc = pty.spawn(sh, args, { name: 'xterm-256color', cols: cols || 120, rows: rows || 30, cwd: dir, env, useConpty: true });
   ptys.set(id, { proc, cwd: dir, provider });
+  updaterCountsChanged();
   proc.onData((d) => { if (win && !win.isDestroyed()) win.webContents.send('pty:data', { id, data: d }); });
   proc.onExit(({ exitCode }) => {
     ptys.delete(id);
+    updaterCountsChanged();
     const c = cloning.get(id);
     if (c) { // a clone terminal: gh's exit code came back as the shell's
       cloning.delete(id);
@@ -608,25 +612,44 @@ async function spawnPty({ cwd, cols, rows, shellPath, provider = null, account: 
 ipcMain.handle('pty:create', async (_e, opts) => spawnPty(opts || {}));
 ipcMain.on('pty:write', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.proc.write(data); });
 ipcMain.on('pty:resize', (_e, { id, cols, rows }) => { const p = ptys.get(id); if (p && cols > 0 && rows > 0) { try { p.proc.resize(cols, rows); } catch { /* ignore */ } } });
-ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); } });
+ipcMain.on('pty:kill', (_e, { id }) => { const p = ptys.get(id); if (p) { try { p.proc.kill(); } catch { /* ignore */ } ptys.delete(id); updaterCountsChanged(); } });
 
-function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); }
+function killAllPtys() { for (const p of ptys.values()) { try { p.proc.kill(); } catch { /* ignore */ } } ptys.clear(); updaterCountsChanged(); }
 
 // ── auto-update (T-022, updater.js): only alive in a packaged build, and it never restarts on its own.
-// Busy = an open terminal or a running worker; the download waits on disk until the owner is idle.
+// Busy = a worker is running. Open terminals are counted and reported, never a blocker: quitting kills
+// them anyway and a Claude session resumes, while a half-finished worker is real work to lose (T-028).
 let updates = null;
 function startUpdater() {
   try {
     updates = updater.start({
       app,
-      isBusy: () => ptys.size > 0 || runningWorkers > 0,
+      runningWorkers: () => runningWorkers,
+      openTerminals: () => ptys.size,
       send: (s) => { if (win && !win.isDestroyed()) win.webContents.send('update', s); },
     });
   } catch (e) { console.error('updater', e && e.message); }
 }
+// The chip and the restart dialog quote the two counts, so a terminal opening or closing and a worker
+// finishing have to push a fresh payload — the updater's own state changes are far too rare for that.
+// Debounced: closing a project's terminals, or a snapshot tick that moves several workers, is one push.
+let countsTimer = null, lastCounts = '';
+function updaterCountsChanged() {
+  if (!updates || countsTimer) return;
+  countsTimer = setTimeout(() => {
+    countsTimer = null;
+    if (!updates || !win || win.isDestroyed()) return;
+    const s = updates.state();
+    const key = `${s.state}:${s.workers}/${s.terminals}`;
+    if (key === lastCounts) return;   // a terminal that opened and closed inside the window changes nothing
+    lastCounts = key;
+    win.webContents.send('update', s);
+  }, 500);
+  if (countsTimer.unref) countsTimer.unref();
+}
 ipcMain.handle('update:state', () => (updates ? updates.state() : { state: 'disabled', reason: 'not started' }));
 ipcMain.handle('update:check', () => (updates ? updates.check() : { state: 'disabled', reason: 'not started' }));
-ipcMain.handle('update:install', () => (updates ? updates.installNow() : { error: 'the updater is not running' }));
+ipcMain.handle('update:install', (_e, opts) => (updates ? updates.installNow(opts || {}) : { error: 'the updater is not running' }));
 
 app.whenReady().then(() => { ensureKit(); notes.poll(); watcher.start(); checkpoints.start(); createWindow(); startUpdater(); setTimeout(() => refreshIntegrations(true), 1500); });
 app.on('window-all-closed', () => { killAllPtys(); watcher.stop(); checkpoints.stop(); if (updates) updates.stop(); diagnostics.stop(); app.quit(); });

@@ -10,7 +10,7 @@ const prov = require('../providers.js');
 const { Secrets } = require('../secrets.js');
 const gset = require('../globalsettings.js');
 const np = require('../newproject-lib.js');
-const { UpdaterState } = require('../updater.js');
+const { UpdaterState, start: startUpdater } = require('../updater.js');
 const diag = require('../diag.js');   // requiring it here is itself the "runs under plain node" check
 const { checkVersion } = require('../build/check-version.js');
 const fs = require('node:fs');
@@ -717,6 +717,8 @@ check('target folder: the parent must be there and the folder must not', () => {
 // ── auto-update (T-022): the state machine only, no Electron and no network. `start()` in updater.js
 // does nothing but wire electron-updater's events to these transitions, so covering them covers it.
 const mkUpdater = (opts = {}) => { const pushed = []; const u = new UpdaterState({ current: '0.2.0', packaged: true, log: () => {}, onChange: (s) => pushed.push(s), ...opts }); return { u, pushed }; };
+/** Drive one to `ready` for 0.3.0, which is the only state an install may happen in. */
+const readyUpdater = (opts = {}) => { const m = mkUpdater(opts); m.u.checking(); m.u.available('0.3.0'); m.u.downloaded('0.3.0'); return m; };
 
 check('updater: a packaged app starts idle and a dev run starts disabled with a reason', () => {
   assert.equal(mkUpdater().u.snapshot().state, 'idle');
@@ -765,17 +767,67 @@ check('updater: nothing moves once it is disabled — a dev run can never offer 
   assert.equal(pushed.length, 0);
   assert.match(u.installBlocker(), /updates are disabled: not packaged/);
 });
-check('updater: busy blocks the install, and only while it is busy', () => {
-  let busy = true;
-  const { u } = mkUpdater({ isBusy: () => busy });
-  u.checking(); u.available('0.3.0'); u.downloaded('0.3.0');
+// T-028: busy is running workers and nothing else. Terminals are counted for the restart dialog to
+// quote, and never block: quitting kills them anyway and a Claude session resumes afterwards.
+check('updater: open terminals never block the restart, they are only counted', () => {
+  const { u } = readyUpdater({ runningWorkers: () => 0, openTerminals: () => 3 });
+  const s = u.snapshot();
+  assert.equal(s.terminals, 3);
+  assert.equal(s.workers, 0);
+  assert.equal(s.busy, false);
+  assert.equal(s.canInstall, true);
+  assert.equal(u.installBlocker(), null);
+});
+check('updater: running workers block the install unless the owner forces it', () => {
+  let workers = 2;
+  const { u } = readyUpdater({ runningWorkers: () => workers, openTerminals: () => 1 });
   assert.equal(u.snapshot().busy, true);
+  assert.equal(u.snapshot().workers, 2);
   assert.equal(u.snapshot().canInstall, false);
-  assert.equal(u.installBlocker(), 'sessions are running');    // the exact text main.js returns to the renderer
-  busy = false;
+  assert.equal(u.installBlocker(), '2 workers are still running');   // the text the renderer shows if it ever surfaces
+  assert.equal(u.installBlocker(true), null);                        // "Restart anyway"
+  workers = 1;
+  assert.equal(u.installBlocker(), '1 worker is still running');
+  workers = 0;
   assert.equal(u.installBlocker(), null);
   assert.equal(u.snapshot().canInstall, true);
 });
+check('updater: force is not a way past a disabled updater or a missing download', () => {
+  const dev = mkUpdater({ packaged: false }).u;
+  assert.match(dev.installBlocker(true), /updates are disabled/);
+  const { u } = mkUpdater({ runningWorkers: () => 0 });
+  assert.equal(u.installBlocker(true), 'no update is ready');
+  u.checking(); u.available('0.3.0');
+  assert.equal(u.installBlocker(true), 'no update is ready');
+});
+check('updater: the payload carries both counts, freshly asked, and survives a missing counter', () => {
+  let workers = 0, terminals = 0;
+  const { u } = readyUpdater({ runningWorkers: () => workers, openTerminals: () => terminals });
+  assert.deepEqual([u.snapshot().workers, u.snapshot().terminals], [0, 0]);
+  workers = 1; terminals = 4;
+  assert.deepEqual([u.snapshot().workers, u.snapshot().terminals], [1, 4]);   // no caching: the chip is never stale
+  terminals = -3; workers = NaN;
+  assert.deepEqual([u.snapshot().workers, u.snapshot().terminals], [0, 0]);   // a nonsense count is zero, never NaN
+  const bare = mkUpdater().u.snapshot();
+  assert.deepEqual([bare.workers, bare.terminals, bare.busy], [0, 0, false]);
+});
+check('updater: MC_UPDATE_FAKE_READY is a development fixture — ready to look at, never ready to install', () => {
+  const logged = [];
+  const h = startUpdater({ app: { isPackaged: false, getVersion: () => '0.2.0' }, fakeReady: '0.9.9', runningWorkers: () => 0, openTerminals: () => 2, send: () => {} });
+  const orig = console.log; console.log = (...a) => logged.push(a.join(' '));
+  let r; try { r = h.installNow({ force: true }); } finally { console.log = orig; }
+  assert.equal(h.state().state, 'ready');
+  assert.equal(h.state().version, '0.9.9');
+  assert.equal(h.state().terminals, 2);
+  assert.deepEqual(r, { error: 'not packaged' });               // quitAndInstall cannot run unpackaged
+  assert.ok(logged.some((l) => /install requested for 0\.9\.9/.test(l)), 'the attempt is logged');
+  h.stop();
+  // and it is ignored the moment the app really is packaged: a release never fakes an update
+  const real = startUpdater({ app: { isPackaged: true, getVersion: () => '0.2.0' }, fakeReady: '0.9.9', autoUpdater: { on: () => {}, checkForUpdates: () => Promise.resolve() }, send: () => {} });
+  assert.equal(real.state().state, 'idle');
+  real.stop();
+});
+
 check('updater: install is refused before an update is downloaded, however quiet the machine is', () => {
   const { u } = mkUpdater();
   assert.equal(u.installBlocker(), 'no update is ready');

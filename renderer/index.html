@@ -83,6 +83,15 @@
         </form>
       </dialog>
 
+      <!-- Restart to install an update (T-028). The chip used to refuse; it asks instead, and says
+           exactly what the restart costs: terminals close, workers are interrupted. -->
+      <dialog id="dlg-update" class="dlg">
+        <h3 id="dlg-update-title">Restart to install</h3>
+        <p class="muted small" id="dlg-update-text"></p>
+        <p class="muted small" id="dlg-update-error" hidden></p>
+        <div class="dlg-actions"><button class="btn" id="update-later" type="button">Not now</button><button class="btn primary" id="update-go" type="button">Restart now</button></div>
+      </dialog>
+
       <dialog id="dlg-team" class="dlg wide">
         <h3>Team &amp; models</h3>
         <p class="muted small" id="dlg-team-project"></p>

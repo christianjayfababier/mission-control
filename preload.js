@@ -72,7 +72,7 @@ contextBridge.exposeInMainWorld('mc', {
   // never sees a file path or a URL, only the state machine's snapshot.
   updateState: () => ipcRenderer.invoke('update:state'),
   updateCheck: () => ipcRenderer.invoke('update:check'),
-  updateInstall: () => ipcRenderer.invoke('update:install'),
+  updateInstall: (opts) => ipcRenderer.invoke('update:install', opts || {}),   // { force: true } = restart with workers still running (T-028)
   onUpdate: on('update'),
   viewReady: (m) => ipcRenderer.send('view:ready', m),   // --view telemetry, printed by a screenshot run
   // crash evidence (T-024, diag.js): the main-process log and the live health flags. Read-only, except
