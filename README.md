@@ -4,6 +4,26 @@ A Windows desktop app with real terminals inside it: projects and their director
 
 Built 2026-09-11. Electron + xterm.js + node-pty, no bundler, no framework.
 
+## Install
+
+Download `Mission-Control-Setup-<version>.exe` from the release and run it. It installs **per user**, with
+no administrator prompt, into `%LOCALAPPDATA%\Programs\mission-control` (the installer lets you pick a
+different directory) and adds a **Mission Control** Start Menu shortcut. Uninstall from Settings -> Apps,
+or with `Uninstall Mission Control.exe` in the install directory.
+
+Mission Control drives tools that already live on the machine, so install these first:
+
+- **Node.js 22 or newer** -- the lead and worker sessions run under it.
+- **Git** -- branches, worktrees and the status reads behind the Explorer.
+- **GitHub CLI** (`gh`), authenticated -- PR watch, `GH_TOKEN` per project.
+- **Claude Code** (`claude`) -- the sessions themselves.
+
+The build is not code-signed. The first time you run a given version SmartScreen shows *Windows protected
+your PC*: choose **More info -> Run anyway**. It asks once per version, not once per launch.
+
+Settings, projects, boards and the orchestrator kit live in `~/.claude/mission-control` and are untouched
+by install, upgrade and uninstall.
+
 ## Launch
 
 - Desktop shortcut **Mission Control** (points at `node_modules\electron\dist\electron.exe` with this folder as the app).
@@ -82,6 +102,7 @@ kit/orchestrator-system.md  default orchestrator rules, copied to ~/.claude/miss
 preload.js       contextBridge API (window.mc)
 renderer/        index.html, app.js (work view), memory.js (memory graph), styles.css (vanilla JS + xterm.js)
 Mission Control.cmd   launcher
+build/make-icon.js    draws build/icon.ico for the installer; dependency-free, re-run after editing it
 ```
 
 State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds).
@@ -102,6 +123,30 @@ AttachConsole failed* at exit. The test filters those out.
 GitHub Actions runs `npm test` on windows-latest for every pull request and every push to `main`
 (`.github/workflows/smoke.yml`). CI does not rebuild node-pty for Electron, so terminals are unavailable
 there; the app tolerates that and the smoke test does not depend on them.
+
+## Build the installer
+
+`npm run dist` builds the Windows NSIS installer with electron-builder and writes
+`dist\Mission-Control-Setup-<version>.exe` (about 93 MB) next to its `.blockmap`; `npm run pack` stops at
+the unpacked `dist\win-unpacked` folder, which is quicker when you only want to look inside the package.
+The whole configuration is the `build` block in `package.json`. The icon is `build/icon.ico`, regenerated
+by `node build/make-icon.js` -- dependency-free and drawn in code, so the only binary in the repo can be
+rebuilt from source. `dist/` is gitignored; never commit it.
+
+Three settings there are deliberate:
+
+- `npmRebuild: false` -- node-pty 1.1.0 ships N-API prebuilds under
+  `node_modules/node-pty/prebuilds/win32-x64` that load under both Node and Electron, and its npm tarball
+  does not carry the winpty C++ sources, so a from-source rebuild fails on every machine including CI.
+  There is nothing to rebuild.
+- `publish: null` -- this app ships no auto-update yet. Without it electron-builder tries to infer a
+  publish provider from the git remote and then fails while writing update metadata.
+- `asarUnpack` -- node-pty's `.node` binaries, `winpty.dll`, `winpty-agent.exe` and the conpty
+  `OpenConsole.exe` have to sit on disk outside the asar or Windows cannot load them.
+
+Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml` on windows-latest: `npm ci`, `npm run dist`,
+the exe uploaded as a workflow artifact, then a **draft** GitHub release created with the exe and the
+blockmap attached. It stays a draft until someone publishes it by hand.
 
 ## Troubleshooting
 
