@@ -91,3 +91,14 @@ lets Windows prompt.
 Notes: `CLAUDE_CONFIG_DIR` moves the whole `~/.claude` tree including `projects/` (transcripts), so per-project Claude accounts
 through separate config dirs are out of scope for T-019; Mission Control reads transcripts from one place. Multiple GitHub
 accounts are already supported by the GitHub CLI since 2.40 and by Mission Control's per-project token injection.
+
+## As built (T-019, reviewed by Skye 2026-09-12)
+
+Deviations from the sections above, accepted at review; T-020 codes against this list:
+- UI groups key off `role === 'required'`, then `kind === 'cli'`, then `kind === 'key'`; key providers carry `role: 'ai'`. `'vcs'` is unused.
+- Probe timeouts: 5 s default, 15 s for Claude Code, 10 s for gh, codex and gemini (`gh auth status` with three keyring logins needs more than 5 s).
+- `providers.js` resolves binaries itself with PATHEXT (`claude` is `claude.cmd` on Windows; the bare `claude` file is a bash script) and runs `.cmd`/`.bat` shims through `cmd.exe`. Codex is also looked for at `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe` (the ChatGPT desktop app's copy, `viaApp: true`); its login line is rewritten to the full path when the binary is off PATH.
+- `Status` gained `path`, `viaApp`, `accounts` (gh logins) and `error`; a provider row gained `blurb`. GitHub's detail says "N logins" because `gh auth status` lists the same account once per credential source.
+- Enablement default: every provider is enabled unless the project or the global setting says otherwise; a key that is not stored exports nothing.
+- Login and install open a terminal tab in the selected project (or the first project with a path); with no projects the dialog says so. A saved key reaches only terminals opened afterwards.
+- Gemini `loggedIn` is always `null` (no status command); the probe reports whether `GEMINI_API_KEY` is set in the app's own environment.
