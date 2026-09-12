@@ -196,7 +196,7 @@ check('count(): 0 without a file, and it follows a write from outside within the
 check('mc-board.js rule add | list | remove writes the same file (MC_DATA_DIR honoured when set)', () => {
   const script = path.join(__dirname, '..', 'kit', 'mc-board.js');
   const dataDir = path.join(tmp, 'cli-data');
-  const run = (...a) => execFileSync(process.execPath, [script, ...a, '--project', proj], { env: { ...process.env, MC_DATA_DIR: dataDir }, encoding: 'utf8' }).trim();
+  const run = (...a) => execFileSync(process.execPath, [script, ...a, '--project', proj], { env: { ...process.env, MC_DATA_DIR: dataDir }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   assert.equal(run('rule', 'list'), 'no rules');
   assert.equal(run('rule', 'add', 'Ship behind a flag.', '--by', 'Skye'), 'added R-001');
   assert.equal(run('rule', 'add', 'Ask before a migration.'), 'added R-002');
@@ -212,6 +212,63 @@ check('mc-board.js rule add | list | remove writes the same file (MC_DATA_DIR ho
   assert.equal(run('rule', 'remove', 'R-009'), 'not found: R-009');
   assert.equal(run('todo', 'add', 'untouched'), 'added D-001');            // the older verbs still work
   assert.equal(run('ticket', 'list'), 'no tickets');
+});
+// T-026: the kit CLIs key the board and notes by project; a worktree must resolve to the main checkout.
+// A main checkout with a real .git DIRECTORY, plus two worktrees whose .git is a FILE (absolute gitdir
+// with a commondir, and a relative gitdir without one). No git binary: these are the files git writes.
+const wtMain = path.join(tmp, 'wt-main');
+const wtSub = path.join(tmp, 'worktrees', 'mc-slug');
+function makeWorktreeFixture() {
+  const gitdir = path.join(wtMain, '.git', 'worktrees', 'mc-slug');
+  fs.mkdirSync(gitdir, { recursive: true });
+  fs.mkdirSync(path.join(wtMain, 'src', 'deep'), { recursive: true });
+  fs.mkdirSync(path.join(wtSub, 'kit'), { recursive: true });
+  fs.writeFileSync(path.join(gitdir, 'commondir'), '../..' + os.EOL);
+  fs.writeFileSync(path.join(gitdir, 'gitdir'), path.join(wtSub, '.git') + os.EOL);
+  // git writes the gitdir with forward slashes on Windows
+  fs.writeFileSync(path.join(wtSub, '.git'), 'gitdir: ' + gitdir.split(path.sep).join('/') + os.EOL);
+}
+check('resolveProjectPath: a worktree resolves to the main checkout, a subfolder to the project root', () => {
+  const { resolveProjectPath, normalizeProjectPath } = require('../kit/mc-project.js');
+  makeWorktreeFixture();
+  assert.equal(resolveProjectPath(wtSub, {}), wtMain);                                  // worktree root
+  assert.equal(resolveProjectPath(path.join(wtSub, 'kit'), {}), wtMain);                // subfolder of the worktree
+  assert.equal(resolveProjectPath(wtSub + path.sep, {}), wtMain);                       // trailing separator
+  assert.equal(resolveProjectPath(wtMain, {}), wtMain);                                 // the main checkout itself
+  assert.equal(resolveProjectPath(path.join(wtMain, 'src', 'deep'), {}), wtMain);       // subfolder of the main repo
+  const plain = path.join(tmp, 'no-git');
+  fs.mkdirSync(plain, { recursive: true });
+  assert.equal(resolveProjectPath(plain, {}), plain);                                   // no .git anywhere: cwd, as before
+  assert.equal(resolveProjectPath(wtSub, { MC_PROJECT: proj }), proj);                  // env override
+  assert.equal(resolveProjectPath(wtSub, { MC_PROJECT: proj }, plain), plain);          // --project wins over it
+  assert.equal(resolveProjectPath(wtSub, { MC_PROJECT: '  ' }), wtMain);                // empty override is no override
+  // a relative gitdir and no commondir file: the `.git/worktrees/<name>` shape is enough
+  const rel = path.join(tmp, 'worktrees', 'mc-rel');
+  fs.mkdirSync(path.join(wtMain, '.git', 'worktrees', 'mc-rel'), { recursive: true });
+  fs.mkdirSync(rel, { recursive: true });
+  fs.writeFileSync(path.join(rel, '.git'), 'gitdir: ../../wt-main/.git/worktrees/mc-rel' + os.EOL);
+  assert.equal(resolveProjectPath(rel, {}), wtMain);
+  // a .git file pointing nowhere useful falls back to the directory holding it
+  const odd = path.join(tmp, 'odd-git');
+  fs.mkdirSync(odd, { recursive: true });
+  fs.writeFileSync(path.join(odd, '.git'), 'gitdir: ' + path.join(tmp, 'elsewhere').split(path.sep).join('/') + os.EOL);
+  assert.equal(resolveProjectPath(odd, {}), odd);
+  assert.equal(normalizeProjectPath(proj + path.sep), proj);
+});
+check('mc-board.js run inside a worktree writes the MAIN checkout board, no phantom one (T-026)', () => {
+  const script = path.join(__dirname, '..', 'kit', 'mc-board.js');
+  const { safeKey } = require('../boards.js');
+  const dataDir = path.join(tmp, 'wt-cli-data');
+  makeWorktreeFixture();
+  const run = (cwd, ...a) => execFileSync(process.execPath, [script, ...a], { cwd, env: { ...process.env, MC_DATA_DIR: dataDir }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  assert.equal(run(path.join(wtSub, 'kit'), 'todo', 'add', 'written from a worktree'), 'added D-001');
+  const boards = path.join(dataDir, 'boards');
+  assert.deepEqual(fs.readdirSync(boards), [safeKey(wtMain) + '.json']);          // the app's own key, and nothing else
+  const board = JSON.parse(fs.readFileSync(path.join(boards, safeKey(wtMain) + '.json'), 'utf8'));
+  assert.equal(board.project, wtMain);
+  assert.deepEqual(board.todos.map((t) => t.text), ['written from a worktree']);
+  assert.equal(run(wtSub, 'todo', 'list'), 'D-001  [ ]  written from a worktree  (orchestrator)');   // and reads it back
+  assert.equal(run(wtMain, 'todo', 'list'), 'D-001  [ ]  written from a worktree  (orchestrator)');  // same board from the main checkout
 });
 
 

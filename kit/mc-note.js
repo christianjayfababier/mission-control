@@ -11,7 +11,12 @@
 
  Notes are appended to ~/.claude/mission-control/notes.jsonl; Mission Control shows them in the sidebar inbox and
  types the owner's answer into your session when it runs inside Mission Control. If it does not, run `answers`.
- The project is the current directory unless --project is given. Never fails the caller: exit code is always 0.
+ The project: `--project <path>` (optional on every verb) wins, then the MC_PROJECT env var, else it is
+ resolved from the current directory — a git worktree resolves to the main checkout it belongs to, a
+ subfolder to the project root — so you can run mc-note.js from anywhere in the project, a worktree included.
+ MC_DEBUG=1 prints the resolved project on stderr (so does a --project that disagrees with the directory
+ you are in).
+ Never fails the caller: exit code is always 0.
 */
 'use strict';
 const fs = require('fs');
@@ -21,7 +26,14 @@ const os = require('os');
 const FILE = path.join(os.homedir(), '.claude', 'mission-control', 'notes.jsonl');
 const args = process.argv.slice(2);
 const flag = (name) => { const i = args.indexOf(name); if (i < 0) return null; const v = args[i + 1]; args.splice(i, 2); return v; };
-const project = (flag('--project') || process.cwd()).replace(/[\\/]+$/, '');
+const projectFlag = flag('--project');
+// T-026: run from a worktree and write the MAIN checkout's project, never a phantom one for the worktree path.
+let resolveProjectPath;
+try { ({ resolveProjectPath } = require('./mc-project.js')); }
+catch { resolveProjectPath = (cwd, env, x) => path.resolve(String((x && String(x).trim() ? x : (env || {}).MC_PROJECT) || cwd || '.')); }
+const project = resolveProjectPath(process.cwd(), process.env, projectFlag);
+if (process.env.MC_DEBUG || (projectFlag && project !== resolveProjectPath(process.cwd(), { ...process.env, MC_PROJECT: '' })))
+  console.error('mc-note: project ' + project + ' (cwd ' + process.cwd() + ')');
 const options = flag('--options');
 const session = flag('--session') || process.env.CLAUDE_SESSION_ID || null;
 const cmd = (args.shift() || '').toLowerCase();

@@ -74,6 +74,7 @@ function ensureKit() {
     fs.writeFileSync(KIT_FILE, fs.readFileSync(path.join(KIT_DIR, 'orchestrator-system.md'), 'utf8').split('{{DATA_DIR}}').join(DATA_DIR));
     fs.copyFileSync(path.join(KIT_DIR, 'mc-note.js'), NOTE_SCRIPT);
     fs.copyFileSync(path.join(KIT_DIR, 'mc-board.js'), path.join(DATA_DIR, 'mc-board.js'));
+    fs.copyFileSync(path.join(KIT_DIR, 'mc-project.js'), path.join(DATA_DIR, 'mc-project.js'));   // both CLIs require it (T-026)
     if (!fs.existsSync(KIT_LOCAL)) fs.writeFileSync(KIT_LOCAL, '# Your additions to the orchestrator rules\n\nEverything below is appended to every lead session\'s system prompt after the Mission Control rules. Edit freely; Mission Control never overwrites this file.\n');
   } catch (e) { console.error('kit', e && e.message); }
 }

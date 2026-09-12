@@ -22,8 +22,15 @@
         (rules are appended to this project's lead system prompt at its next launch; the owner sees and edits them in the Rules tab)
 
  Board file: ~/.claude/mission-control/boards/<project-key>.json, rules file
- ~/.claude/mission-control/rules/<project-key>.json (project = --project <path> or the current directory).
- Set MC_DATA_DIR to point both somewhere else (tests only; unset it and the real data dir is used).
+ ~/.claude/mission-control/rules/<project-key>.json.
+
+ The project: `--project <path>` (optional on every verb) wins, then the MC_PROJECT env var, else it is
+ resolved from the current directory — a git worktree resolves to the main checkout it belongs to, a
+ subfolder to the project root — so you can run mc-board.js from anywhere in the project, a worktree included.
+ MC_DEBUG=1 prints the resolved project on stderr (so does a --project that disagrees with the directory
+ you are in).
+ Set MC_DATA_DIR to point the board and rules files somewhere else (tests only; unset it and the real
+ data dir is used).
  Mission Control shows changes within two seconds. Exit code is always 0.
 */
 'use strict';
@@ -37,8 +44,14 @@ const RULES_DIR = path.join(ROOT, 'rules');
 const args = process.argv.slice(2);
 const flags = {};
 for (let i = 0; i < args.length; i++) { if (!args[i].startsWith('--')) continue; const k = args[i].slice(2); const hasVal = args[i + 1] !== undefined && !String(args[i + 1]).startsWith('--'); flags[k] = hasVal ? args[i + 1] : 'yes'; args.splice(i, hasVal ? 2 : 1); i--; }
-const project = (flags.project || process.cwd()).replace(/[\\/]+$/, '');
-const key = project.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+// T-026: run from a worktree and write the MAIN checkout's project, never a phantom one for the worktree path.
+let resolveProjectPath;
+try { ({ resolveProjectPath } = require('./mc-project.js')); }
+catch { resolveProjectPath = (cwd, env, x) => path.resolve(String((x && String(x).trim() ? x : (env || {}).MC_PROJECT) || cwd || '.')); }
+const project = resolveProjectPath(process.cwd(), process.env, flags.project);
+if (process.env.MC_DEBUG || (flags.project && project !== resolveProjectPath(process.cwd(), { ...process.env, MC_PROJECT: '' })))
+  console.error('mc-board: project ' + project + ' (cwd ' + process.cwd() + ')');
+const key = project.toLowerCase().replace(/[^a-z0-9]+/g, '-');   // boards.js safeKey(): the app keys the same file
 const FILE = path.join(DIR, key + '.json');
 const RULES_FILE = path.join(RULES_DIR, key + '.json');
 const now = () => new Date().toISOString();
