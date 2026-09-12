@@ -4,11 +4,14 @@
   "version": "0.1.0",
   "description": "Desktop terminal workspace for Claude Code orchestrators and their worker agents across projects.",
   "main": "main.js",
+  "author": "kaiGen_dev",
   "private": true,
   "scripts": {
     "start": "electron .",
     "screenshot": "electron . --screenshot screenshot.png",
-    "test": "node test/unit.js && node test/smoke.js"
+    "test": "node test/unit.js && node test/smoke.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -17,6 +20,54 @@
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.kaigen.missioncontrol",
+    "productName": "Mission Control",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "npmRebuild": false,
+    "publish": null,
+    "files": [
+      "main.js",
+      "preload.js",
+      "checkpoint.js",
+      "transcripts.js",
+      "integrations.js",
+      "boards.js",
+      "rules.js",
+      "explorer.js",
+      "prwatch.js",
+      "team.js",
+      "package.json",
+      "kit/**",
+      "renderer/**",
+      "node_modules/**",
+      "!test/**",
+      "!docs/**",
+      "!.github/**",
+      "!node_modules/node-pty/prebuilds/**/*.pdb",
+      "!*.png",
+      "!build/**"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**",
+      "**/*.node"
+    ],
+    "artifactName": "Mission-Control-Setup-${version}.${ext}",
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Mission Control"
+    }
   }
 }
