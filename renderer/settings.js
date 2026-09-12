@@ -40,6 +40,8 @@
     }
   }
   function show(id) {
+    // Global rules is the only section with an editor in it, so it is the only one that can be left half-written.
+    if (current === 'rules' && id !== 'rules' && rulesDirty) { askUnsaved('switching to ' + labelOf(id), () => show(id)); return; }
     current = SECTIONS.some((s) => s.id === id) ? id : 'accounts';
     for (const b of document.querySelectorAll('.set-nav-btn')) b.classList.toggle('active', b.dataset.sec === current);
     for (const sec of document.querySelectorAll('.set-sec')) sec.hidden = sec.dataset.sec !== current;
@@ -57,9 +59,53 @@
     if (!d.open) d.showModal();
   }
 
-  // ───────── global rules: the one file the owner may edit from here
+  // ───────── global rules: the one file the owner may edit from here.
+  // It is the only editable text in this dialog, so it is the only thing a stray click can lose: while the
+  // textarea differs from what is on disk the section is "dirty", and leaving it (another section, Done/Esc,
+  // or Reload from disk) asks first — inline, because the renderer's confirm() blocks the whole app.
   const rulesStatus = (m) => { const s = $('#set-rules-status'); if (!s) return; s.textContent = m || ''; if (m) setTimeout(() => { if (s.textContent === m) s.textContent = ''; }, 6000); };
+  const labelOf = (id) => (SECTIONS.find((s) => s.id === id) || {}).label || 'another section';
   let rulesLoaded = false;
+  let rulesSaved = '';        // the text as it last came from (or went to) disk: the baseline for "dirty" and for Discard
+  let rulesDirty = false;
+  let askRow = null, askProceed = null;   // the inline prompt, built on first use, and what to run once it is answered
+
+  /** The two tells: the Save button lights up, and the section's own nav entry — its title — says "unsaved". */
+  function markDirty(on) {
+    rulesDirty = !!on;
+    const save = $('#set-rules-save');
+    if (save) { save.classList.toggle('primary', rulesDirty); save.title = rulesDirty ? 'Unsaved changes' : 'The file on disk matches this text'; }
+    const nav = document.querySelector('.set-nav-btn[data-sec="rules"]');
+    if (nav) {
+      let b = nav.querySelector('.set-unsaved');
+      if (!rulesDirty) { if (b) b.remove(); }
+      else if (!b) { b = el('span', 'badge set-unsaved', 'unsaved'); b.style.alignSelf = 'flex-start'; b.style.marginTop = '3px'; b.style.background = '#3a2a10'; b.style.color = 'var(--amber)'; nav.appendChild(b); }
+    }
+    if (!rulesDirty) hideAsk();
+  }
+  function hideAsk() { askProceed = null; if (askRow) askRow.hidden = true; }
+  /** Ask, then continue. Clean: `proceed` runs straight away. Dirty: the inline row appears and `proceed` waits
+      for Save or Discard; "Keep editing" drops it. Never blocks the renderer, never uses confirm(). */
+  function askUnsaved(what, proceed) {
+    if (!rulesDirty) { proceed(); return; }
+    const sec = document.querySelector('.set-sec[data-sec="rules"]'); if (!sec) { proceed(); return; }
+    if (!askRow) {
+      askRow = el('div', 'set-row-item set-ask'); askRow.style.borderColor = 'var(--amber)';
+      const who = el('div', 'set-row-who');
+      who.appendChild(el('div', 'set-row-name', 'You have unsaved changes'));
+      who.appendChild(el('div', 'set-row-path set-ask-what', ''));
+      askRow.appendChild(who);
+      const act = (label, cls, fn) => { const b = el('button', 'btn small' + (cls ? ' ' + cls : ''), label); b.onclick = fn; askRow.appendChild(b); };
+      act('Save', 'primary', async () => { const go = askProceed; if (await saveRules()) { hideAsk(); if (go) go(); } });
+      act('Discard', '', () => { const go = askProceed; const ta = $('#set-rules-text'); if (ta) ta.value = rulesSaved; markDirty(false); rulesStatus('changes discarded'); if (go) go(); });
+      act('Keep editing', '', () => { hideAsk(); const ta = $('#set-rules-text'); if (ta) ta.focus(); });
+      sec.appendChild(askRow);
+    }
+    const w = askRow.querySelector('.set-ask-what'); if (w) w.textContent = what ? 'Save them before ' + what + '?' : 'Save them first?';
+    askProceed = proceed;
+    askRow.hidden = false;
+    try { askRow.scrollIntoView({ block: 'nearest' }); } catch { /* older engines */ }
+  }
   async function loadRules(force) {
     const ta = $('#set-rules-text'); if (!ta) return;
     const file = envOf().kitLocal;
@@ -67,20 +113,29 @@
     if (!file || !window.mc || typeof window.mc.readText !== 'function') { ta.value = ''; ta.placeholder = 'unavailable'; return; }
     if (rulesLoaded && !force) return;
     const r = await window.mc.readText(file);
-    if (r && r.error) { ta.value = ''; ta.placeholder = r.error; rulesStatus(r.error); return; }
+    if (r && r.error) { ta.value = ''; rulesSaved = ''; markDirty(false); ta.placeholder = r.error; rulesStatus(r.error); return; }
     ta.value = (r && r.text) || '';
+    rulesSaved = ta.value; markDirty(false);
     ta.placeholder = 'Anything you write here is appended to every lead session’s system prompt.';
     rulesLoaded = true;
   }
-  const saveBtn = $('#set-rules-save');
-  if (saveBtn) saveBtn.onclick = async () => {
+  /** Write the textarea to disk. Says whether it landed, so the inline prompt knows if it may continue. */
+  async function saveRules() {
     const file = envOf().kitLocal; const ta = $('#set-rules-text');
-    if (!file || !ta || !window.mc || typeof window.mc.writeLocalRules !== 'function') { rulesStatus('this build cannot write that file'); return; }
-    const r = await window.mc.writeLocalRules(file, ta.value);
-    rulesStatus(r && r.error ? r.error : `saved · ${r.bytes} bytes · leads pick it up at their next launch`);
-  };
+    if (!file || !ta || !window.mc || typeof window.mc.writeLocalRules !== 'function') { rulesStatus('this build cannot write that file'); return false; }
+    const text = ta.value;
+    const r = await window.mc.writeLocalRules(file, text);
+    if (r && r.error) { rulesStatus(r.error); return false; }
+    rulesSaved = text; markDirty(ta.value !== rulesSaved);   // typing during the write keeps the section dirty
+    rulesStatus(`saved · ${r.bytes} bytes · leads pick it up at their next launch`);
+    return true;
+  }
+  const rulesText = $('#set-rules-text');
+  if (rulesText) rulesText.oninput = () => markDirty(rulesText.value !== rulesSaved);
+  const saveBtn = $('#set-rules-save');
+  if (saveBtn) { saveBtn.classList.remove('primary'); saveBtn.onclick = () => saveRules(); }   // primary is now the dirty marker
   const reloadBtn = $('#set-rules-reload');
-  if (reloadBtn) reloadBtn.onclick = () => { rulesLoaded = false; loadRules(true); rulesStatus('reloaded from disk'); };
+  if (reloadBtn) reloadBtn.onclick = () => askUnsaved('reloading from disk', () => { rulesLoaded = false; loadRules(true); rulesStatus('reloaded from disk'); });
 
   // ───────── hidden projects
   async function loadHidden() {
@@ -192,7 +247,10 @@
 
   // ───────── wiring
   const cog = $('#btn-cog'); if (cog) cog.onclick = () => open();
-  const close = $('#set-close'); if (close) close.onclick = () => dlg().close();
+  /** Done and Esc both go through the unsaved-changes guard; nothing else about them changes. */
+  const requestClose = () => askUnsaved('closing Settings', () => { const d = dlg(); if (d && d.open) d.close(); });
+  const close = $('#set-close'); if (close) close.onclick = requestClose;
+  const dlgEl = dlg(); if (dlgEl) dlgEl.addEventListener('cancel', (e) => { if (!rulesDirty) return; e.preventDefault(); requestClose(); });
 
   window.Settings = {
     open,
