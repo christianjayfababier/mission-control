@@ -19,7 +19,8 @@
       <div class="sb-section inbox-head"><span>Inbox</span><span id="inbox-count" class="badge"></span><span id="inbox-status" class="inbox-status"></span></div>
       <div id="inbox" class="inbox"></div>
       <div class="sb-foot">
-        <button id="btn-add" class="btn">+ Add folder</button>
+        <button id="btn-cog" class="btn icon" title="Settings">⚙</button>
+        <button id="btn-add" class="btn">+ Add/create a project</button>
         <span class="muted small" id="sb-hint" title="Every project Mission Control has ever seen a session in stays in the list. Quiet ones are grouped under Idle.">nothing is ever dropped</span>
       </div>
     </aside>
@@ -43,7 +44,7 @@
           <button id="btn-explorer" class="btn" title="Browse this project&#39;s files and branches: git marks, and which agent is reading or editing each file">Explorer</button>
           <button id="btn-repo" class="btn" title="GitHub repository and account used for this project's commits and PRs">Repo &amp; account</button>
           <button id="btn-team" class="btn" title="Roles the orchestrator can dispatch, and the model and effort each one runs at">Team &amp; models</button>
-          <button id="btn-accounts" class="btn" title="Claude Code, GitHub CLI and the other AI tools: what is installed, who is logged in, and the API keys every terminal gets">Accounts &amp; AI</button>
+          <button id="btn-ai" class="btn" title="Which AI providers this project's terminals may use">AI</button>
           <label class="chk"><input type="checkbox" id="chk-finished" checked> finished workers</label>
         </div>
       </header>
@@ -74,11 +75,6 @@
             <label>Commit email<input id="f-email" type="text" placeholder="filled from the account when empty"></label>
           </div>
           <p class="muted small">The account's token and identity are set in the environment of every new terminal for this project (GH_TOKEN, GIT_AUTHOR_*/GIT_COMMITTER_*), so gh and git push act as that account while other projects keep theirs. Existing terminals keep their old identity: close and reopen them.</p>
-          <div class="prov-check">
-            <div class="prov-check-head">Providers this project may use</div>
-            <div id="repo-providers" class="prov-check-list"></div>
-            <p class="muted small">Unticked providers keep their API key out of this project's terminals. Everything is ticked until you say otherwise; the keys themselves live in Accounts &amp; AI.</p>
-          </div>
           <div class="dlg-actions"><button value="cancel" class="btn" type="button" id="f-cancel">Cancel</button><button value="save" class="btn primary" id="f-save">Save</button></div>
         </form>
       </dialog>
@@ -92,15 +88,43 @@
         <div class="dlg-actions"><button class="btn primary" id="team-close" type="button">Done</button></div>
       </dialog>
 
-      <dialog id="dlg-accounts" class="dlg wide">
-        <h3>Accounts &amp; AI</h3>
-        <p class="muted small">The tools Mission Control and its workers run, and the keys they run with. Logins and installs open in a terminal of the selected project, where you can answer their prompts. New terminals pick up a saved key; terminals that are already open keep the environment they started with.</p>
-        <div class="acct-actions">
-          <button class="btn small" id="acct-refresh">Refresh</button>
-          <span class="muted small" id="acct-status"></span>
+      <dialog id="dlg-ai" class="dlg">
+        <h3>AI providers for this project</h3>
+        <p class="muted small" id="dlg-ai-project"></p>
+        <p class="muted small">Every new terminal Mission Control opens for this project gets the API keys of the providers ticked below (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code>). Untick one and its key stays out of this project — the key itself is kept, and other projects still get it. The keys live in Settings → Accounts &amp; AI, behind the cog at the bottom of the sidebar.</p>
+        <div id="ai-providers" class="prov-check-list"></div>
+        <div class="dlg-actions"><button class="btn primary" id="ai-close" type="button">Done</button></div>
+      </dialog>
+
+      <dialog id="dlg-settings" class="dlg wide">
+        <h3>Settings</h3>
+        <div class="set-body">
+          <nav class="set-nav" id="set-nav"></nav>
+          <div class="set-pane" id="set-pane">
+            <section class="set-sec" data-sec="accounts">
+              <p class="muted small">The tools Mission Control and its workers run, and the keys they run with. Logins and installs open in a terminal of the selected project, where you can answer their prompts. New terminals pick up a saved key; terminals that are already open keep the environment they started with.</p>
+              <div class="acct-actions">
+                <button class="btn small" id="acct-refresh">Refresh</button>
+                <span class="muted small" id="acct-status"></span>
+              </div>
+              <div id="acct-groups" class="acct-groups"></div>
+            </section>
+            <section class="set-sec" data-sec="rules" hidden>
+              <p class="muted small">Your own additions to the orchestrator rulebook. They are appended to <em>every</em> lead session's system prompt, after Mission Control's own rules and before the project block, in every project. Mission Control never overwrites this file. A lead that is already running keeps the prompt it started with: changes reach it at its next launch.</p>
+              <p class="muted small mono" id="set-rules-path"></p>
+              <textarea id="set-rules-text" class="set-textarea" spellcheck="false" placeholder="Loading…"></textarea>
+              <div class="set-row"><button class="btn primary small" id="set-rules-save">Save</button><button class="btn small" id="set-rules-reload">Reload from disk</button><span class="muted small" id="set-rules-status"></span></div>
+            </section>
+            <section class="set-sec" data-sec="hidden" hidden>
+              <p class="muted small">Projects you hid from the sidebar. Mission Control still remembers them and everything it ever saw in them; hiding only takes them out of the list. Pinned projects are never hidden.</p>
+              <div id="set-hidden-list" class="set-list"></div>
+            </section>
+            <section class="set-sec" data-sec="about" hidden>
+              <div id="set-about" class="set-list"></div>
+            </section>
+          </div>
         </div>
-        <div id="acct-groups" class="acct-groups"></div>
-        <div class="dlg-actions"><button class="btn primary" id="acct-close" type="button">Done</button></div>
+        <div class="dlg-actions"><button class="btn primary" id="set-close" type="button">Done</button></div>
       </dialog>
 
       <section id="memory" class="memory" hidden>
@@ -139,6 +163,7 @@
   <script src="board.js"></script>
   <script src="rules.js"></script>
   <script src="accounts.js"></script>
+  <script src="settings.js"></script>
   <script src="memory.js"></script>
 </body>
 </html>

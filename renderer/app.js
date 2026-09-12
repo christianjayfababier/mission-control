@@ -586,7 +586,6 @@ function renderPrStrip(p) {
     const sel = $('#f-account'); sel.innerHTML = '<option value="">Machine default (active gh account)</option>';
     try { for (const a of await window.mc.ghAccounts()) { const o = el('option', null, a.login + (a.active ? ' (active on this machine)' : '')); o.value = a.login; sel.appendChild(o); } } catch { /* gh missing */ }
     sel.value = s.ghAccount || '';
-    if (window.Accounts) window.Accounts.projectChecklist($('#repo-providers'), p.path);   // "Providers this project may use"
     dlg.dataset.path = p.path; dlg.showModal();
   };
   $('#f-account').onchange = () => { $('#f-name').value = ''; $('#f-email').value = ''; }; // let the account fill them in
@@ -705,8 +704,12 @@ window.mc.onEnv((env) => { state.env = env;
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }
     // --view rules opens the Rules tab and its viewer on the first rule file the repo actually has
     if (env.startView === 'rules') { activateTab('rules'); if (window.Rules) window.Rules.openFromStartView(); return; }
-    // --view accounts opens the Accounts & AI dialog on live probe results
-    if (env.startView === 'accounts') { if (window.Accounts) window.Accounts.open(); return; }
+    // --view settings opens the global Settings dialog (settings-rules / -hidden / -about pick a section);
+    // --view accounts is kept as an alias for the section that used to be its own dialog
+    if (String(env.startView).startsWith('settings')) { if (window.Settings) window.Settings.openFromStartView(env.startView); return; }
+    if (env.startView === 'accounts') { if (window.Settings) window.Settings.open('accounts'); return; }
+    // --view ai opens this project's provider checklist
+    if (env.startView === 'ai') { if (window.Accounts) window.Accounts.openAi(); return; }
     if (env.startView === 'session') { if (p.sessions[0]) activateTab('sess:' + p.sessions[0].id); }
     else if (env.startView !== 'memory') activateTab(env.startView);
   }, 1500); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });

@@ -37,7 +37,9 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--bg-3); color: var(--muted); white-space: nowrap; }
 .badge.run { background: #2a1f45; color: var(--magenta); }
 .badge.live { background: #12301c; color: var(--green); }
-.sb-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sb-foot { padding: 10px 14px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.sb-foot #btn-add { flex: 1; white-space: nowrap; }
+.sb-foot #sb-hint { flex-basis: 100%; }
 /* project groups: Active / Idle (collapsible; no project is ever dropped) */
 .proj-grp { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
 .proj-grp.toggle { cursor: pointer; border-radius: 6px; user-select: none; }
@@ -464,8 +466,31 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .acct-warn { border: 1px solid var(--amber); border-radius: 8px; padding: 8px 10px; font-size: 11px; line-height: 1.5; color: var(--amber); }
 
 /* "Providers this project may use", inside the Repo & account dialog */
-.prov-check { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
-.prov-check-head { font-size: 12px; font-weight: 700; }
 .prov-check-list { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; }
 .prov-chk { flex-direction: row !important; align-items: center; gap: 6px; font-size: 12px; color: var(--ink); }
 .prov-chk-var { font-family: var(--mono); font-size: 10px; color: var(--magenta); }
+
+/* Settings: the cog in the sidebar footer, and the dialog's nav + pane. `display` is scoped to [open]
+   through .dlg.wide[open] above; nothing here may set display on the dialog itself. */
+.btn.icon { padding: 4px 8px; font-size: 14px; line-height: 1; }
+.set-body { display: grid; grid-template-columns: 208px 1fr; gap: 14px; min-height: 0; flex: 1; }
+.set-nav { display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--line); padding-right: 12px; }
+.set-nav-btn { display: flex; flex-direction: column; gap: 1px; text-align: left; background: none; border: 1px solid transparent; border-radius: 7px; padding: 7px 9px; cursor: pointer; color: var(--ink); }
+.set-nav-btn:hover { background: var(--bg-3); }
+.set-nav-btn.active { background: var(--bg-3); border-color: var(--line); }
+.set-nav-btn.active .set-nav-label { color: var(--accent); }
+.set-nav-label { font-size: 12px; font-weight: 700; }
+.set-nav-hint { font-size: 11px; color: var(--muted); }
+.set-pane { min-width: 0; min-height: 0; overflow-y: auto; }
+.set-sec { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.set-sec[hidden] { display: none !important; }
+.set-sec > .acct-groups { overflow: visible; }
+.set-textarea { background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px; font-family: var(--mono); font-size: 12px; line-height: 1.55; min-height: 46vh; resize: vertical; }
+.set-textarea:focus { outline: none; border-color: var(--accent); }
+.set-row { display: flex; gap: 8px; align-items: center; }
+.set-list { display: flex; flex-direction: column; gap: 6px; }
+.set-row-item { display: flex; gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.set-row-who { flex: 1; min-width: 0; }
+.set-row-name { font-size: 12px; font-weight: 700; }
+.set-row-path { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-empty { padding: 14px 2px; line-height: 1.6; }
