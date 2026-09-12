@@ -125,6 +125,10 @@ code { font-family: var(--mono); background: var(--bg-3); padding: 0 4px; border
 .update-chip.ready.busy { border-color: #5a4520; background: #3a2a10; color: var(--amber); }
 .update-chip.working { color: var(--accent); }
 .update-note { font-size: 11px; color: var(--amber); max-width: 240px; }
+/* crash evidence (T-024): two header chips that are hidden whenever there is nothing wrong. */
+.mem-chip { display: inline-flex; align-items: center; white-space: nowrap; font-size: 12px; font-weight: 600; padding: 4px 11px; border-radius: 999px; border: 1px solid #5a4520; background: #3a2a10; color: var(--amber); cursor: default; }
+.crash-banner { display: inline-flex; align-items: center; white-space: nowrap; font-size: 12px; font-weight: 600; padding: 4px 11px; border-radius: 999px; border: 1px solid #6b3030; background: #3a1414; color: var(--red); font-family: inherit; cursor: pointer; }
+.crash-banner:hover { border-color: var(--red); }
 .note-src { margin-left: auto; flex: none; white-space: nowrap; }
 .note-title.link { cursor: pointer; } .note-title.link:hover { color: var(--accent); }
 

@@ -75,6 +75,11 @@ contextBridge.exposeInMainWorld('mc', {
   updateInstall: () => ipcRenderer.invoke('update:install'),
   onUpdate: on('update'),
   viewReady: (m) => ipcRenderer.send('view:ready', m),   // --view telemetry, printed by a screenshot run
+  // crash evidence (T-024, diag.js): the main-process log and the live health flags. Read-only, except
+  // for the one acknowledgement that dismisses the "the window crashed and was reloaded" banner.
+  diagInfo: () => ipcRenderer.invoke('diag:info'),
+  diagAck: () => ipcRenderer.send('diag:ack'),
+  onDiag: on('diag'),
   // the global Settings dialog (the cog in the sidebar): the owner's rulebook additions and hidden projects
   writeLocalRules: (absPath, text) => ipcRenderer.invoke('rules:writeLocal', { path: absPath, text }),
   hiddenProjects: () => ipcRenderer.invoke('projects:hidden'),

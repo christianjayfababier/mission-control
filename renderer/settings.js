@@ -9,7 +9,8 @@
                           unhideProject).
      About & diagnostics — version, the data directory and the kit files, all from the `env` payload,
                           plus Check for updates: the same updater state machine the header chip shows
-                          (T-022), asked on demand and refreshed live while the dialog is open.
+                          (T-022), asked on demand and refreshed live while the dialog is open, and the
+                          main-process crash log with the last memory sample (T-024, diag.js).
    Load order: … → rules.js → accounts.js → settings.js. It reads window.MC and window.Accounts lazily. */
 'use strict';
 (() => {
@@ -123,8 +124,30 @@
     line('Your additions (never overwritten)', env.kitLocal);
     line('Inbox script handed to every lead', env.noteScript);
     line('Terminals', env.ptyAvailable ? 'node-pty loaded' : 'unavailable: ' + (env.ptyError || 'node-pty failed to load'));
-    line('Crash log', 'coming with T-024');
+    renderCrashLog(box);
     renderUpdates(box);
+  }
+
+  // ───────── crash evidence (T-024, diag.js): where the black box is, how big it got, and the last
+  // memory sample. Asked every time the section opens, because both numbers move while the app runs.
+  function renderCrashLog(box) {
+    const row = el('div', 'set-row-item');
+    const who = el('div', 'set-row-who');
+    who.appendChild(el('div', 'set-row-name', 'Crash log (main process)'));
+    const where = el('div', 'set-row-path mono', 'reading…'); who.appendChild(where);
+    const mem = el('div', 'set-row-path mono', ''); who.appendChild(mem);
+    row.appendChild(who);
+    const btn = el('button', 'btn small', 'Open log'); btn.disabled = true;
+    row.appendChild(btn);
+    box.appendChild(row);
+    if (!window.mc || typeof window.mc.diagInfo !== 'function') { where.textContent = 'this build does not write one'; return; }
+    window.mc.diagInfo().then((d) => {
+      if (!d || !d.file) { where.textContent = 'unavailable'; return; }
+      const size = d.bytes == null ? 'not written yet' : d.bytes < 1024 ? d.bytes + ' B' : Math.round(d.bytes / 1024) + ' KB';
+      where.textContent = `${d.file} · ${size}` + (d.error ? ' · ' + d.error : '');
+      mem.textContent = 'Last memory sample: ' + (d.memory || 'no sample yet') + (d.crashes ? ` · ${d.crashes} renderer crash${d.crashes === 1 ? '' : 'es'} this run` : '');
+      if (d.bytes != null) { btn.disabled = false; btn.onclick = () => window.mc.openPath(d.file); }
+    }).catch((e) => { where.textContent = String((e && e.message) || e); });
   }
 
   // ───────── updates: one row inside About, fed by the same push the header chip listens to

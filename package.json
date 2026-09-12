@@ -41,6 +41,7 @@
       "main.js",
       "preload.js",
       "updater.js",
+      "diag.js",
       "checkpoint.js",
       "transcripts.js",
       "integrations.js",

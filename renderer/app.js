@@ -626,6 +626,38 @@ $('#update-chip').onclick = async () => {
 window.mc.onUpdate((u) => { updateState = u; renderUpdateChip(); if (window.Settings && window.Settings.onUpdate) window.Settings.onUpdate(u); });
 window.mc.updateState().then((u) => { updateState = u; renderUpdateChip(); }).catch(() => {});
 
+// ───────────── crash evidence (T-024, diag.js in the main process)
+// Two more chips, both hidden while nothing is wrong. "Low system memory" is the warning the
+// 2026-09-12 restarts never gave: the machine's commit charge ran out and the app simply vanished.
+// The crash banner appears after diag.js has reloaded a renderer that died, and the owner clicks it away.
+let diagState = { lowMemory: false, crashed: false };
+function renderDiag() {
+  const d = diagState || {};
+  const mem = $('#mem-chip');
+  if (mem) {
+    mem.hidden = !d.lowMemory;
+    if (d.lowMemory) {
+      mem.textContent = 'Low system memory';
+      const bits = [];
+      if (d.commitPct != null) bits.push(`commit charge ${d.commitPct}%`);
+      if (d.freeMb != null) bits.push(`${d.freeMb} MB RAM free`);
+      mem.title = (bits.join(' · ') || 'this machine is short of memory')
+        + '\nMission Control writes this to its main-process log (Settings → About & diagnostics). Close what you are not using: a machine at its commit limit kills windows without a message.';
+    }
+  }
+  const crash = $('#crash-banner');
+  if (crash) {
+    crash.hidden = !d.crashed;
+    if (d.crashed) {
+      crash.textContent = 'The window crashed and was reloaded';
+      crash.title = (d.crashReason ? 'Reason: ' + d.crashReason + '\n' : '') + 'The details are in the main-process log (Settings → About & diagnostics). Click to dismiss.';
+    }
+  }
+}
+// Never alert() from here either: a blocking dialog would freeze the terminals behind it.
+$('#crash-banner').onclick = () => { diagState = { ...diagState, crashed: false, crashReason: null }; renderDiag(); if (window.mc.diagAck) window.mc.diagAck(); };
+window.mc.onDiag((d) => { diagState = { ...diagState, ...(d || {}) }; renderDiag(); });
+
 // settings dialog
 (() => {
   const dlg = $('#dlg-repo'); if (!dlg) return;

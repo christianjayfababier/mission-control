@@ -121,6 +121,7 @@ explorer.js      git-backed file tree, status, branches and branch diffs for the
 kit/orchestrator-system.md  default orchestrator rules, copied to ~/.claude/mission-control/ on first run
 preload.js       contextBridge API (window.mc)
 updater.js       auto-update: a pure state machine plus the electron-updater wiring; disabled unless packaged
+diag.js          crash evidence: the main-process log, the renderer-gone recovery and the memory guard
 renderer/        index.html, app.js (work view), memory.js (memory graph), styles.css (vanilla JS + xterm.js)
 Mission Control.cmd   launcher
 build/make-icon.js    draws build/icon.ico for the installer; dependency-free, re-run after editing it
@@ -128,7 +129,8 @@ build/check-version.js  the release guard: the pushed tag must name the version 
 CHANGELOG.md     what shipped in each version, newest first
 ```
 
-State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds).
+State: `~/.claude/mission-control/projects.json` (added folders), `window.json` (window bounds),
+`logs/main.log` (the crash log, see Troubleshooting).
 
 ## Tests
 
@@ -178,6 +180,12 @@ update to every installed copy.
 
 ## Troubleshooting
 
+- **The app vanished or restarted and you want to know why**: read `%USERPROFILE%\.claude\mission-control\logs\main.log` (Settings → About & diagnostics shows the path, its size and an **Open log** button). The launcher `start`s electron.exe, so stderr goes nowhere — this file is the evidence. One line per event, `<ISO time> pid=<pid> <level> <event> <detail>`; every line carries the pid because the installed app and a worktree run share the same file. It rotates at 1 MB into `main.log.1`.
+  - `startup` / `will-quit` / `quit` — a clean exit always ends in `will-quit`, so a run that simply stops is a crash.
+  - `render-process-gone` — the window died: reason and exit code, plus the last memory sample. The window is reloaded once after a second and says so in a header banner.
+  - `uncaught-exception` / `unhandled-rejection` — in a packaged app these are logged and the app keeps running (no "A JavaScript error occurred in the main process" box nobody is there to click); a development run still gets the box.
+  - `memory` — the guard samples every minute and logs when the Windows commit charge is at 80 % or more, or free RAM is under 1.5 GB, at most once every five minutes. A **Low system memory** chip appears in the project header with the numbers in its tooltip. The 2026-09-12 restarts were exactly this: 52 of 65 GB committed by stale dev servers (80.0 %, about 4 GB free, then under 1 GB), and the app disappeared without a word. Both thresholds are set so that sample trips them.
+  - To prove the recovery path on purpose, start the app with `MC_DIAG_CRASH_TEST=1` (optionally `MC_DIAG_CRASH_AFTER_MS`); it crashes its own renderer once, a few seconds after the window opens.
 - **"Terminals are unavailable"**: node-pty's native binary did not load for this Electron version. Run `npx @electron/rebuild -f -w node-pty` in this folder (needs Visual Studio Build Tools with the C++ workload, present on this machine).
 - Long messages arriving without their beginning: Claude Code's Windows TUI keeps only the last 1024-byte ConPTY chunk of a single write, so the composer, inbox answers and pastes into a terminal are written in 512-byte slices with a 25 ms gap (`writeText` in `renderer/app.js`).
 - `test/pty-paste-harness.js` checks that against a real TUI. It is manual and costs a few haiku turns: `ELECTRON_RUN_AS_NODE=1 npx electron test/pty-paste-harness.js [trusted-folder]`. It prints INTACT/TRUNCATED per case and deletes the session transcript it made.
