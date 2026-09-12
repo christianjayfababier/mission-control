@@ -695,17 +695,34 @@ async function answerNote(n, answer) {
 })();
 
 // ───────────── data feed
-/** Run `fn` once a project is selected (`idle` needs none), giving up after about six seconds. */
+// How long the renderer took to become usable, for the one line a screenshot run prints. The numbers are
+// milliseconds since the `env` message, which is the first thing the renderer hears from main.
+const perf = { env: 0, toSnapshot: null, toSelected: null, render: null, workers: null, workerCount: null };
+const since = () => (perf.env ? performance.now() - perf.env : null);
+/** Run `fn` once a project is selected (`idle` needs none), giving up after twenty seconds. The poll starts
+    almost at once and is quick, so the number it reports is when the project really arrived — not the delay. */
 function startViewWhenReady(view, fn) {
   let tries = 0;
+  const MAX = 80;              // 80 x 250 ms ~= 20 s
   const tick = () => {
     tries++;
-    if (view === 'idle' || currentProject() || tries >= 12) { fn(); return; }
-    setTimeout(tick, 500);
+    if (currentProject() && perf.toSelected == null) perf.toSelected = since();
+    if (view === 'idle' || currentProject() || tries >= MAX) {
+      fn();
+      const toView = since();
+      // Report after the browser has actually presented a frame containing the view. Two rAFs is the
+      // standard "after the next paint" signal, and on a loaded machine the gap between opening a dialog
+      // and painting it is the part that matters: a screenshot taken before it captures the page without it.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try { if (window.mc.viewReady) window.mc.viewReady({ view, toSnapshot: perf.toSnapshot, toSelected: perf.toSelected, toView, toPainted: since(), render: perf.render, workers: perf.workers, workerCount: perf.workerCount, gaveUp: tries >= MAX }); } catch { /* ignore */ }
+      }));
+      return;
+    }
+    setTimeout(tick, 250);
   };
-  setTimeout(tick, 1200);
+  setTimeout(tick, 150);
 }
-window.mc.onEnv((env) => { state.env = env;
+window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performance.now();
   // --view fired exactly once, 1.5 s in, and then did nothing at all when no project had been selected
   // yet: on a busy machine the first snapshot lands later than that and the screenshot came out empty.
   // Wait for a project instead, for up to six seconds.
@@ -727,15 +744,18 @@ window.mc.onEnv((env) => { state.env = env;
     else if (env.startView !== 'memory') activateTab(env.startView);
   }); if (!env.ptyAvailable) $('#orch-empty').innerHTML = `Terminals are unavailable (node-pty failed to load: <code>${env.ptyError || ''}</code>). Session monitors and worker windows still work.`; });
 window.mc.onSnapshot((snap) => {
+  const t0 = performance.now();
   state.snapshot = snap; renderSidebar(); renderInbox(snap);
   const p = currentProject();
   if (window.Explorer) window.Explorer.render(p, snap);
   if (p) {
-    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs(); renderWorkers();
+    $('#ph-name').textContent = p.name; $('#ph-path').textContent = p.path || ''; renderHeader(p); renderPrStrip(p); renderTabs();
+    const tw = performance.now(); renderWorkers(); if (perf.workers == null) { perf.workers = performance.now() - tw; perf.workerCount = (p.workers || []).length; }
     if (!state.activeTab.get(p.key)) activateTab(firstTabId(p.key));
     else if (state.activeTab.get(p.key) === 'lead') activateTab('lead'); // swaps launcher → conversation once the lead session's transcript appears
     if (p.path && !state.terms.has(p.key) && state.env.ptyAvailable) newTerminal(p, { activate: false });
   }
+  if (perf.toSnapshot == null) { perf.toSnapshot = since(); perf.render = performance.now() - t0; }
 });
 setInterval(() => { renderWorkers(); }, 1000);
 // The PR strip's two-row cap is measured against the strip's width, so a resize has to re-measure it:

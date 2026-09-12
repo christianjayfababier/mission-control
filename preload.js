@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('mc', {
   secretSet: (id, value) => ipcRenderer.invoke('secrets:set', { id, value }),
   secretRemove: (id) => ipcRenderer.invoke('secrets:remove', { id }),
   onProviders: on('providers'),
+  viewReady: (m) => ipcRenderer.send('view:ready', m),   // --view telemetry, printed by a screenshot run
   // the global Settings dialog (the cog in the sidebar): the owner's rulebook additions and hidden projects
   writeLocalRules: (absPath, text) => ipcRenderer.invoke('rules:writeLocal', { path: absPath, text }),
   hiddenProjects: () => ipcRenderer.invoke('projects:hidden'),

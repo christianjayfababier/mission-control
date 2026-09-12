@@ -54,6 +54,7 @@
   // ───────── a status line: a dot, the version, and the one line the probe wrote
   function dotClass(p, st) {
     if (!st) return 'unknown';
+    if (st.checking) return 'checking';
     if (p.kind === 'key') return st.installed ? 'ok' : 'off';
     if (!st.installed) return p.role === 'required' ? 'bad' : 'off';
     if (st.loggedIn === false) return 'warn';
@@ -105,7 +106,8 @@
     row.appendChild(mid);
 
     const ctl = el('div', 'acct-ctl');
-    if ((!st || !st.installed) && p.install) {
+    if (st && st.checking) { /* nothing to offer until the probe answers */ }
+    else if ((!st || !st.installed) && p.install) {
       const b = el('button', 'btn small primary', 'Install'); b.title = p.install; b.onclick = () => runInTerminal('install', p); ctl.appendChild(b);
     } else if (st && st.installed && p.login) {
       const b = el('button', 'btn small' + (st.loggedIn === false ? ' primary' : ''), st.loggedIn ? 'Log in again' : 'Log in');
@@ -161,7 +163,7 @@
     box.innerHTML = '';
     if (!hasBackend()) { box.appendChild(el('div', 'muted', 'This build has no accounts backend.')); return; }
     const list = (data && data.providers) || [];
-    if (!list.length) { box.appendChild(el('div', 'muted', 'Reading the providers…')); return; }
+    if (!list.length) { box.appendChild(el('div', 'muted', 'Reading the providers…')); return; }   // only before the first payload
     if (data && !data.encryption) box.appendChild(el('div', 'acct-warn', 'This machine cannot encrypt secrets (Electron safeStorage is unavailable), so Mission Control will not store an API key here. The CLI logins above are unaffected.'));
     for (const g of GROUPS) {
       const members = list.filter(g.match); if (!members.length) continue;
@@ -173,6 +175,18 @@
     }
     const none = el('div', 'muted'); none.id = 'acct-none'; none.hidden = true; box.appendChild(none);
     applyFilter();                     // a redraw must not forget what the owner is filtering by
+  }
+
+  /** Swap just the rows named in `ids` for freshly built ones, keeping everything else on screen. */
+  function updateRows(ids) {
+    const box = $('#acct-groups'); if (!box || !data) return;
+    for (const id of ids) {
+      const row = box.querySelector(`.acct-row[data-provider="${id}"]`); if (!row) continue;
+      const p = (data.providers || []).find((x) => x.id === id); if (!p) continue;
+      const fresh = p.kind === 'key' ? keyRow(p, data.status[id]) : cliRow(p, data.status[id]);
+      fresh.hidden = row.hidden;                 // the filter's decision about this row still stands
+      row.replaceWith(fresh);
+    }
   }
 
   async function reload(force) { if (force) status('running the status probes…'); await load(force); render(); if (force) status('status refreshed'); }
@@ -228,6 +242,7 @@
     if (!p) return { ready: true, reason: null, actions: [] };
     if (p.kind === 'key') return hasKey ? { ready: true, reason: null, actions: [] } : { ready: false, reason: 'no-key', actions: ['settings'] };
     const s = st || {};
+    if (s.checking) return { ready: true, reason: null, actions: [] };
     if (s.installed === false) return { ready: false, reason: 'not-installed', actions: p.install ? ['install'] : [] };
     if (s.loggedIn === false) return { ready: false, reason: 'not-logged-in', actions: p.login ? ['login'] : [] };
     return { ready: true, reason: null, actions: [] };
@@ -366,8 +381,14 @@
   if (window.mc && typeof window.mc.onProviders === 'function') {
     window.mc.onProviders((payload) => {          // a refresh finished, or a login terminal exited
       if (!payload) return;
-      data = { ...(data || {}), ...payload };
-      if (isOpen()) render();
+      // a partial push carries only the providers that have just answered. Merging (rather than replacing)
+       // is what keeps every other row exactly as it was; providers.applyStatusPatch is the tested original.
+      const partial = !!payload.partial && !!data;
+      data = partial
+        ? { ...data, status: { ...(data.status || {}), ...(payload.status || {}) } }
+        : { ...(data || {}), ...payload };
+      // a partial push touches a handful of rows; redraw those, not the whole list
+      if (isOpen()) { if (partial) updateRows(Object.keys(payload.status || {})); else render(); }
       if (aiOpen()) { const p = window.MC && window.MC.currentProject(); if (p && p.path) projectChecklist($('#ai-groups'), p.path); }
     });
   }
