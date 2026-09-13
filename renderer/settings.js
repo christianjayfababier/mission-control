@@ -179,8 +179,33 @@
     line('Your additions (never overwritten)', env.kitLocal);
     line('Inbox script handed to every lead', env.noteScript);
     line('Terminals', env.ptyAvailable ? 'node-pty loaded' : 'unavailable: ' + (env.ptyError || 'node-pty failed to load'));
+    renderSetupRow(box);
     renderCrashLog(box);
     renderUpdates(box);
+  }
+
+  // ───────── the first-run wizard, on demand (T-020). It opens by itself once per machine; this is the
+  // only way back to it, and it is deliberately harmless: reopening it changes nothing until you finish.
+  function renderSetupRow(box) {
+    const row = el('div', 'set-row-item');
+    const who = el('div', 'set-row-who');
+    who.appendChild(el('div', 'set-row-name', 'Setup'));
+    const where = el('div', 'set-row-path mono', 'the four required tools, the optional AI tools, and a first project');
+    who.appendChild(where);
+    row.appendChild(who);
+    const b = el('button', 'btn small', 'Run setup again');
+    b.onclick = () => { const d = dlg(); if (d && d.open) d.close(); if (window.Setup) window.Setup.open('welcome'); };
+    b.disabled = !window.Setup;
+    row.appendChild(b);
+    box.appendChild(row);
+    if (window.mc && typeof window.mc.setupState === 'function') {
+      window.mc.setupState().then((s) => {
+        if (!s) return;
+        const n = (s.projects || []).length;
+        where.textContent = (s.setup && s.setup.completedAt ? `finished ${String(s.setup.completedAt).slice(0, 10)}${s.setup.version ? ' on ' + s.setup.version : ''}` : 'never finished on this machine')
+          + ` · ${n} project${n === 1 ? '' : 's'} in the registry`;
+      }).catch(() => { /* the row is useful without it */ });
+    }
   }
 
   // ───────── crash evidence (T-024, diag.js): where the black box is, how big it got, and the last

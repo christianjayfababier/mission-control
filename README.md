@@ -14,6 +14,12 @@ or with `Uninstall Mission Control.exe` in the install directory.
 
 Mission Control drives tools that already live on the machine, so install these first:
 
+New to Mission Control? **[docs/FIRST-RUN.md](docs/FIRST-RUN.md)** walks a second owner from this
+download to their first Recall. The app helps too: on a machine with no projects yet it opens a four-step
+**Setup** wizard by itself, which checks the four tools below, offers the optional AI tools and keys, and
+adds the first project. **Settings -> About & diagnostics -> Run setup again** reopens it any time. `--view setup` opens the wizard for a
+screenshot (and `--view setup-tools`, `setup-ai`, `setup-project` its later steps) without stamping anything.
+
 - **Node.js 22 or newer** -- the lead and worker sessions run under it.
 - **Git** -- branches, worktrees and the status reads behind the Explorer.
 - **GitHub CLI** (`gh`), authenticated -- PR watch, `GH_TOKEN` per project.
@@ -124,6 +130,8 @@ rules.js         owner-rules store, repo rule-file discovery, the viewer's sandb
 explorer.js      git-backed file tree, status, branches and branch diffs for the Explorer panel
 kit/orchestrator-system.md  default orchestrator rules, copied to ~/.claude/mission-control/ on first run
 preload.js       contextBridge API (window.mc)
+setup-lib.js     first-run wizard: where the data directory is (--data-dir) and whether setup should open
+renderer/setup.js  the Setup wizard dialog: welcome, the four required tools, optional AI tools, first project
 updater.js       auto-update: a pure state machine plus the electron-updater wiring; disabled unless packaged
 diag.js          crash evidence: the main-process log, the renderer-gone recovery and the memory guard
 renderer/        index.html, app.js (work view), memory.js (memory graph), styles.css (vanilla JS + xterm.js)
@@ -190,6 +198,15 @@ update to every installed copy.
   - `uncaught-exception` / `unhandled-rejection` — in a packaged app these are logged and the app keeps running (no "A JavaScript error occurred in the main process" box nobody is there to click); a development run still gets the box.
   - `memory` — the guard samples every minute and logs when the Windows commit charge is at 80 % or more, or free RAM is under 1.5 GB, at most once every five minutes. A **Low system memory** chip appears in the project header with the numbers in its tooltip. The 2026-09-12 restarts were exactly this: 52 of 65 GB committed by stale dev servers (80.0 %, about 4 GB free, then under 1 GB), and the app disappeared without a word. Both thresholds are set so that sample trips them.
   - To prove the recovery path on purpose, start the app with `MC_DIAG_CRASH_TEST=1` (optionally `MC_DIAG_CRASH_AFTER_MS`); it crashes its own renderer once, a few seconds after the window opens.
+- **Trying a fresh install without losing the one you have**: start the app with `--data-dir <path>` and every
+  file Mission Control owns moves there for that run -- the project registry, settings, boards, notes, PR watch,
+  the orchestrator kit copied in at every start, and a Chromium profile of its own so it does not fight the
+  running app's cache. `~/.claude/mission-control` is not read and not written. Because the registry is empty,
+  the Setup wizard opens by itself, which is how it is verified:
+  `env -u ELECTRON_RUN_AS_NODE npx electron . --data-dir C:\Temp\mc-fresh --screenshot fresh.png --wait 8000`.
+  Claude Code's transcripts are not ours and stay in `~/.claude/projects`, so a trial run still sees the
+  sessions on this machine; only what Mission Control itself keeps moves. Delete the directory when done.
+  Without the flag nothing changes.
 - **Looking at the update chip and its restart dialog in development**: a development run can never download a release, so start it with `MC_UPDATE_FAKE_READY=0.9.9` (unpackaged runs only; a packaged build ignores it). The updater goes straight to `ready` for that version, the header chip and **Settings → About** show it with the live terminal and worker counts, and clicking the chip opens the real restart confirmation. Nothing is downloaded and nothing restarts: the install answers `not packaged`, after logging the attempt like any other.
 - **"Terminals are unavailable"**: node-pty's native binary did not load for this Electron version. Run `npx @electron/rebuild -f -w node-pty` in this folder (needs Visual Studio Build Tools with the C++ workload, present on this machine).
 - Long messages arriving without their beginning: Claude Code's Windows TUI keeps only the last 1024-byte ConPTY chunk of a single write, so the composer, inbox answers and pastes into a terminal are written in 512-byte slices with a 25 ms gap (`writeText` in `renderer/app.js`).

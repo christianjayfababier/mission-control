@@ -863,7 +863,9 @@ function startViewWhenReady(view, fn) {
   const tick = () => {
     tries++;
     if (currentProject() && perf.toSelected == null) perf.toSelected = since();
-    if (view === 'idle' || currentProject() || tries >= MAX) {
+    // `idle` and `setup` are the two views that need no project: the wizard exists precisely for a
+    // machine that has none, so waiting for one here would hold the screenshot for the full 20 s.
+    if (view === 'idle' || String(view).startsWith('setup') || currentProject() || tries >= MAX) {
       fn();
       const toView = since();
       // Report after the browser has actually presented a frame containing the view. Two rAFs is the
@@ -879,6 +881,10 @@ function startViewWhenReady(view, fn) {
   setTimeout(tick, 150);
 }
 window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performance.now();
+  // First run (T-020): main.js decided this with setup-lib.shouldOpenSetup — no setup stamp in
+  // settings.json AND no projects in the registry. A `--view` run is deliberate and owns the screen,
+  // so the wizard never gatecrashes one.
+  if (env.setupNeeded && !env.startView) setTimeout(() => { if (window.Setup) window.Setup.open('welcome', { firstRun: true }); }, 250);
   // --view fired exactly once, 1.5 s in, and then did nothing at all when no project had been selected
   // yet: on a busy machine the first snapshot lands later than that and the screenshot came out empty.
   // Wait for a project instead, for up to six seconds.
@@ -887,6 +893,9 @@ window.mc.onEnv((env) => { state.env = env; if (!perf.env) perf.env = performanc
     if (env.startView === 'idle') { state.idleOpen = true; renderSidebar(); return; }
     // --view new-project opens Add/create a project on its New folder mode
     if (env.startView === 'new-project') { if (window.NewProject) window.NewProject.open('new'); return; }
+    // --view setup opens the first-run wizard on Welcome, without stamping anything (T-020)
+    if (env.startView === 'setup') { if (window.Setup) window.Setup.open('welcome'); return; }
+    if (String(env.startView).startsWith('setup-')) { if (window.Setup) window.Setup.open(String(env.startView).slice(6)); return; }
     const p = currentProject(); if (!p) return;
     // --view explorer opens the Explorer panel; --view explorer-branches opens it on the Branches tab
     if (String(env.startView).startsWith('explorer')) { if (window.Explorer) window.Explorer.openFromStartView(env.startView); return; }

@@ -142,6 +142,45 @@
         <div class="dlg-actions"><button class="btn primary" id="set-close" type="button">Done</button></div>
       </dialog>
 
+      <!-- First-run Setup wizard (T-020, renderer/setup.js). It opens by itself only on a machine with no
+           setup stamp and no projects; otherwise from Settings → About, or `--view setup`. -->
+      <dialog id="dlg-setup" class="dlg wide">
+        <h3>Set up Mission Control</h3>
+        <p class="muted small" id="setup-intro"></p>
+        <div class="set-body">
+          <nav class="set-nav" id="setup-nav"></nav>
+          <div class="set-pane" id="setup-pane">
+            <section class="set-sec" data-step="welcome">
+              <div class="setup-prose">
+                <p>Mission Control gives every project of yours a <strong>lead</strong>: one long-running Claude Code session that remembers the project. It recalls where the work stood from its memory files, plans the next move with you, dispatches worker sessions onto their own branches and worktrees, and keeps a board of tickets and todos plus an inbox where it asks you the questions only you can answer. You watch all of it from here: the terminals, the workers, the pull requests, the rules each lead follows.</p>
+                <p>Setup checks the four tools Mission Control needs on this machine — <strong>Node.js</strong>, <strong>Git</strong>, the <strong>GitHub CLI</strong> and <strong>Claude Code</strong> — and helps you install or sign in to whatever is missing. Then it offers the optional AI tools and API keys, which you can just as well leave for later, and finally adds your first project folder. Nothing here is permanent: everything can be changed afterwards from the cog at the bottom of the sidebar.</p>
+              </div>
+            </section>
+            <section class="set-sec" data-step="tools" hidden>
+              <p class="muted small">These four have to be there before a lead can do anything. <strong>Install</strong> and <strong>Log in</strong> open a terminal and run the command for you, so you can answer whatever it asks; the browser flows finish in that terminal too. Press <strong>Refresh</strong> once one of them is done.</p>
+              <div class="setup-block" id="setup-tools-block"></div>
+              <div class="acct-actions"><button class="btn small" id="setup-refresh">Refresh</button></div>
+              <div id="setup-tools" class="acct-groups"></div>
+            </section>
+            <section class="set-sec" data-step="ai" hidden>
+              <p class="muted small">Optional. Extra coding agents a worker may call, and the API keys they run on (kept encrypted on this machine and exported into the terminals of any project that is allowed to use them). <strong>You can do this later in Settings → Accounts &amp; AI</strong> — skip straight past this step if you would rather.</p>
+              <div id="setup-ai-groups" class="acct-groups"></div>
+            </section>
+            <section class="set-sec" data-step="project" hidden>
+              <p class="muted small">A project is a folder on this machine, usually a git repository. Add one that exists, create a new one, or clone it from GitHub — Mission Control starts watching it straight away and gives it a lead, a board, an inbox and a memory of its own.</p>
+              <div class="set-row"><button class="btn primary" id="setup-add">+ Add/create a project</button></div>
+              <div id="setup-projects" class="set-list"></div>
+            </section>
+          </div>
+        </div>
+        <div class="dlg-actions">
+          <span class="muted small" id="setup-status"></span>
+          <button class="btn" id="setup-skip" type="button" hidden>Skip for now</button>
+          <button class="btn" id="setup-back" type="button">Back</button>
+          <button class="btn primary" id="setup-next" type="button">Next</button>
+        </div>
+      </dialog>
+
       <section id="memory" class="memory" hidden>
         <div class="mem-toolbar">
           <input id="mem-search" type="search" placeholder="Search memories…" spellcheck="false">
@@ -182,5 +221,6 @@
   <script src="settings.js"></script>
   <script src="memory.js"></script>
   <script src="newproject.js"></script>
+  <script src="setup.js"></script>
 </body>
 </html>

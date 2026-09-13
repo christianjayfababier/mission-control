@@ -10,6 +10,7 @@ const prov = require('../providers.js');
 const { Secrets } = require('../secrets.js');
 const gset = require('../globalsettings.js');
 const np = require('../newproject-lib.js');
+const setuplib = require('../setup-lib.js');
 const { UpdaterState, start: startUpdater } = require('../updater.js');
 const diag = require('../diag.js');   // requiring it here is itself the "runs under plain node" check
 const { checkVersion } = require('../build/check-version.js');
@@ -278,7 +279,10 @@ check('mc-board.js run inside a worktree writes the MAIN checkout board, no phan
 check('registry: every row carries what the dialogs need, ids and bins are unique, list() drops the probes', () => {
   const ids = prov.PROVIDERS.map((p) => p.id);
   assert.equal(new Set(ids).size, ids.length, 'provider ids must be unique');
-  assert.equal(ids.length, 19);
+  assert.equal(ids.length, 21);
+  // the REQUIRED group draws in registry order too: the two the owner signs in to first, then the
+  // prerequisites the Setup wizard checks (T-020)
+  assert.deepEqual(prov.PROVIDERS.filter((p) => p.role === 'required').map((p) => p.id), ['claude', 'github', 'node', 'git']);
   // the AI TOOLS group draws in registry order, and the owner picked this one
   assert.deepEqual(prov.PROVIDERS.filter((p) => p.kind === 'cli' && p.role === 'ai').map((p) => p.id),
     ['codex', 'gemini', 'copilot', 'cursor', 'cline', 'opencode', 'aider', 'goose', 'ollama']);
@@ -553,6 +557,62 @@ check('a tool without a status command is installed-or-not, and never nags for a
     assert.equal(missing.reason, 'not-installed');
     assert.deepEqual(missing.actions, p.install ? ['install'] : [], id + ' offers Install only if it has a line');
   }
+});
+
+// ── the first-run Setup wizard (T-020): the two prerequisites it added to the registry, and setup-lib
+check('the wizard’s prerequisites are in the registry: Node and Git, installed-or-not, never a login', () => {
+  for (const [id, bin, winget] of [['node', 'node', 'OpenJS.NodeJS.LTS'], ['git', 'git', 'Git.Git']]) {
+    const p = prov.byId(id);
+    assert.ok(p, id + ' must be in the registry');
+    assert.equal(p.role, 'required');
+    assert.equal(p.kind, 'cli');
+    assert.equal(p.bin, bin);
+    assert.equal(p.winget, winget);
+    assert.equal(prov.installLine(id), `winget install --id ${winget} -e --accept-source-agreements --accept-package-agreements`);
+    assert.equal(p.login, null, id + ' has no account to log in to');
+    assert.equal(prov.loginLine(id), null);
+    assert.match(p.docs, /^https:\/\//);
+    // never installed → the wizard offers Install; installed → ready, and it never asks for a login
+    assert.deepEqual(prov.readiness(p, { installed: false }, false), { ready: false, reason: 'not-installed', actions: ['install'] });
+    assert.equal(prov.readiness(p, { installed: true, loggedIn: null }, false).ready, true);
+  }
+  // the four the Tools step gates on, and nothing else
+  assert.deepEqual(prov.PROVIDERS.filter((p) => p.role === 'required').map((p) => p.id).sort(), ['claude', 'git', 'github', 'node']);
+});
+
+check('shouldOpenSetup: only a machine with no stamp and no projects gets the wizard unasked', () => {
+  const stamp = { setup: { completedAt: '2026-09-13T10:00:00.000Z', version: '0.2.2' } };
+  const proj = [{ path: 'C:\\ClaudeApps\\MissionControl', name: 'MissionControl' }];
+  assert.equal(setuplib.shouldOpenSetup({}, []), true, 'fresh install');
+  assert.equal(setuplib.shouldOpenSetup(null, null), true, 'a missing settings.json is still a fresh install');
+  assert.equal(setuplib.shouldOpenSetup(stamp, []), false, 'finished once, never again');
+  assert.equal(setuplib.shouldOpenSetup(stamp, proj), false);
+  assert.equal(setuplib.shouldOpenSetup({}, proj), false, 'projects but no stamp: not a first run, so no wizard');
+  // a half-written stamp is not a completion
+  assert.equal(setuplib.shouldOpenSetup({ setup: {} }, []), true);
+  assert.equal(setuplib.shouldOpenSetup({ setup: 'yes' }, []), true);
+  assert.equal(setuplib.setupState(stamp).version, '0.2.2');
+  assert.equal(setuplib.setupState({}), null);
+  // the other settings.json keys are none of its business
+  assert.equal(setuplib.shouldOpenSetup({ providers: { codex: false } }, []), true);
+
+  const rec = setuplib.setupRecord('0.3.0', Date.parse('2026-09-13T10:00:00.000Z'));
+  assert.deepEqual(rec, { completedAt: '2026-09-13T10:00:00.000Z', version: '0.3.0' });
+  assert.equal(setuplib.shouldOpenSetup({ setup: rec }, []), false, 'what Finish writes is what stops it');
+});
+
+check('--data-dir: the flag moves the data directory for one run, and a malformed flag never does', () => {
+  const home = path.join(os.homedir(), '.claude', 'mission-control');
+  const argv = (...rest) => ['node', 'main.js', ...rest];
+  assert.equal(setuplib.resolveDataDir(argv(), home), home);
+  assert.equal(setuplib.resolveDataDir(argv('--screenshot', 'out.png'), home), home);
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir'), home), home, 'a flag with nothing after it is ignored');
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir', '--view', 'setup'), home), home, 'the next flag is not a path');
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir', '  '), home), home);
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir', 'C:\\tmp\\mc-fresh'), home), path.resolve('C:\\tmp\\mc-fresh'));
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir', 'C:\\tmp\\mc-fresh', '--view', 'setup'), home), path.resolve('C:\\tmp\\mc-fresh'));
+  assert.equal(setuplib.resolveDataDir(argv('--data-dir', './rel'), home), path.resolve('./rel'), 'relative paths resolve against cwd');
+  assert.equal(setuplib.resolveDataDir(null, home), home);
 });
 
 checkAsync('pool: every item runs, results keep their order, and never more than n at a time', async () => {

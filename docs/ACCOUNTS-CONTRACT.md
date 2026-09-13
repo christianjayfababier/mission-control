@@ -127,3 +127,17 @@ Deviations from the sections above, accepted at review; T-020 codes against this
 - Renderer: rows draw immediately with a grey "checking…" dot; `readiness()` treats `checking` as unknown (no callout). Settings rows update in place; the AI Collaboration list redraws on a push.
 - `view:ready` IPC: in screenshot mode the renderer reports when a `--view` dialog is open and painted; main prints one `VIEW READY <name> · env→snapshot … · env→painted …` line for the smoke run. Measured on this machine with 37 worker panes: snapshot 41-64 ms, project selected 152-329 ms, dialog open ~170-365 ms, first render 35-54 ms (renderWorkers 2-3 ms).
 - Known harness gap: `capturePage()` can return a frame that is stale for a recently updated row under low memory; a screenshot may lag the DOM. Follow-up on the board.
+
+## Prerequisites added by the Setup wizard (T-020, 2026-09-13)
+
+- The registry gained two `role: 'required'`, `kind: 'cli'` rows: **Node.js** (`node --version`, winget `OpenJS.NodeJS.LTS`,
+  nodejs.org) and **Git** (`git --version`, winget `Git.Git`, git-scm.com). Neither has a login line, so `loggedIn` is always
+  null and neither ever asks to be signed in. 21 rows now: 13 CLIs, 8 keys. REQUIRED draws claude, github, node, git.
+- `dotClass()` in renderer/accounts.js: an installed tool with **no login line** is a green dot, not a grey one — readiness()
+  already called it ready, and the grey dot only ever meant "we cannot tell whether it is signed in".
+- The wizard borrows the row renderer rather than copying it: `window.Accounts.row(p, st)`, `GROUPS`, `ensure(force)`,
+  `onUpdate(cb)` and `setStatusSink(fn)` are exported for it. Install and Log in run the same terminal flows; with no
+  project to host the terminal, they now say the command line instead of refusing silently.
+- New IPC: `setup:state` → `{ setup: { completedAt, version } | null, projects: [{ path, name }], needed }` (the
+  **registry**, never the snapshot — a `--data-dir` trial run must not look furnished), and `setup:done`, which stamps
+  `settings.json`. The `env` payload gained `setupNeeded`.

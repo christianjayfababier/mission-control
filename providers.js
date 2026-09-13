@@ -52,6 +52,27 @@ const PROVIDERS = [
     blurb: 'Branches, pull requests and the per-project token every terminal gets.',
     status: probeGithub,
   },
+  // The two prerequisites (T-020). Nobody logs in to Node or Git, so `login` is null and `loggedIn` stays
+  // null: the Setup wizard and the dialogs only ever ask whether they are there. Claude Code and the
+  // GitHub CLI stay first in the REQUIRED group — they are what the owner actually has to sign in to.
+  {
+    id: 'node', name: 'Node.js', kind: 'cli', role: 'required', bin: 'node',
+    winget: 'OpenJS.NodeJS.LTS', install: WINGET('OpenJS.NodeJS.LTS'),
+    login: null,                             // there is no account: Node is a runtime
+    keys: [],
+    docs: 'https://nodejs.org/en/download',
+    blurb: 'The runtime Mission Control itself runs on, and the one the inbox and board scripts every lead is handed are written in.',
+    status: versionProbe('node'),
+  },
+  {
+    id: 'git', name: 'Git', kind: 'cli', role: 'required', bin: 'git',
+    winget: 'Git.Git', install: WINGET('Git.Git'),
+    login: null,                             // the account lives in the GitHub CLI, not in git itself
+    keys: [],
+    docs: 'https://git-scm.com/downloads',
+    blurb: 'Branches, worktrees and commits: every work item Mission Control dispatches is a branch of your repository.',
+    status: versionProbe('git'),
+  },
   {
     id: 'codex', name: 'OpenAI Codex CLI', kind: 'cli', role: 'ai', bin: 'codex',
     winget: 'OpenAI.Codex', install: WINGET('OpenAI.Codex'),

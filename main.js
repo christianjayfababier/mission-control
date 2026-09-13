@@ -24,11 +24,18 @@ const newproject = require('./newproject-lib');
 const updater = require('./updater');
 const diag = require('./diag');
 const { ChatService } = require('./chat');
+const setuplib = require('./setup-lib');
 
 let pty = null, ptyError = null;
 try { pty = require('node-pty'); } catch (e) { ptyError = String(e && e.message || e); }
 
-const DATA_DIR = path.join(os.homedir(), '.claude', 'mission-control');
+// Everything Mission Control owns lives here: the registry, the settings, the boards, the notes, and the
+// kit the leads are handed. `--data-dir <path>` moves all of it for one run, so a fresh install can be
+// tried out on a machine that already has one (README → Troubleshooting). Without the flag nothing moves.
+// The transcripts Claude Code writes are NOT ours and stay where Claude Code puts them.
+const DEFAULT_DATA_DIR = path.join(os.homedir(), '.claude', 'mission-control');
+const DATA_DIR = setuplib.resolveDataDir(process.argv, DEFAULT_DATA_DIR);
+const DATA_DIR_OVERRIDDEN = DATA_DIR !== DEFAULT_DATA_DIR;
 const PROJ_DIR_ROOT = path.join(os.homedir(), '.claude', 'projects');
 const START_VIEW = (() => { const i = process.argv.indexOf('--view'); return i >= 0 ? process.argv[i + 1] : null; })();
 const REGISTRY = path.join(DATA_DIR, 'projects.json');
@@ -43,6 +50,11 @@ let rendererFailed = false, shotProfile = null;
 if (SCREENSHOT) {
   try { shotProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-shot-')); app.setPath('userData', shotProfile); app.setPath('sessionData', shotProfile); }
   catch (e) { console.error('screenshot profile', e && e.message); }
+} else if (DATA_DIR_OVERRIDDEN) {
+  // A --data-dir run is a pretend second installation; give it a Chromium profile of its own too, or it
+  // fights the disk cache of the real Mission Control ("Unable to move the cache") and inherits its window.
+  try { const p = path.join(DATA_DIR, 'chromium'); fs.mkdirSync(p, { recursive: true }); app.setPath('userData', p); app.setPath('sessionData', p); }
+  catch (e) { console.error('data-dir profile', e && e.message); }
 }
 /** Screenshot mode only: bin this run's throwaway profile, and stale ones earlier runs could not delete. */
 function sweepShotProfiles() {
@@ -302,7 +314,7 @@ function createWindow() {
   const save = () => { if (!win || win.isDestroyed() || win.isMinimized()) return; const b = win.getBounds(); writeJson(WINSTATE, b); };
   win.on('resize', save); win.on('move', save);
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron, packaged: app.isPackaged });
+    win.webContents.send('env', { ptyAvailable: !!pty, ptyError, home: os.homedir(), platform: process.platform, startView: START_VIEW, dataDir: DATA_DIR, kitFile: KIT_FILE, kitLocal: KIT_LOCAL, noteScript: NOTE_SCRIPT, version: app.getVersion(), electron: process.versions.electron, packaged: app.isPackaged, setupNeeded: setupPayload().needed });
     win.webContents.send('diag', diagnostics.state());   // low-memory chip and, after a crash, the reload banner
     sendSnapshot();
     if (updates) win.webContents.send('update', updates.state());
@@ -464,6 +476,29 @@ ipcMain.handle('providers:enable', (_e, { path: p, id, enabled } = {}) => {
   if (p) { const s = settings.get(p); const next = { ...(s.providers || {}), [id]: !!enabled }; settings.set(p, { providers: next }); return { path: p, providers: next }; }
   const g = globalSettings(); g.providers = { ...(g.providers || {}), [id]: !!enabled }; writeJson(GLOBAL_SETTINGS, g);
   return { path: null, providers: g.providers };
+});
+
+// ── first-run Setup wizard (T-020, renderer/setup.js). The wizard needs two things main knows and the
+// snapshot does not: whether this machine ever finished setup, and what is in the *registry* — pinned
+// projects only, never the ones transcript discovery found, or a `--data-dir` trial run would look
+// furnished on the very first screen.
+function setupPayload() {
+  const reg = registry();
+  return {
+    setup: setuplib.setupState(globalSettings()),
+    projects: reg.filter(Boolean).map((r) => { const p = String((r && r.path) || r); return { path: p, name: (r && r.name) || path.basename(p.replace(/[\\/]+$/, '')) || p }; }),
+    needed: setuplib.shouldOpenSetup(globalSettings(), reg),
+  };
+}
+ipcMain.handle('setup:state', () => setupPayload());
+/** Finish: stamp settings.json so the wizard never opens by itself again. About can still reopen it. */
+ipcMain.handle('setup:done', () => {
+  try {
+    const g = globalSettings();
+    g.setup = setuplib.setupRecord(app.getVersion());
+    writeJson(GLOBAL_SETTINGS, g);
+    return { ok: true, setup: g.setup };
+  } catch (e) { return { error: String((e && e.message) || e).slice(0, 200) }; }
 });
 
 // ── inbox: the owner answers or dismisses the orchestrator's notes

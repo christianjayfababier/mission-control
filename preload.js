@@ -92,6 +92,10 @@ contextBridge.exposeInMainWorld('mc', {
   writeLocalRules: (absPath, text) => ipcRenderer.invoke('rules:writeLocal', { path: absPath, text }),
   hiddenProjects: () => ipcRenderer.invoke('projects:hidden'),
   unhideProject: (p) => ipcRenderer.invoke('projects:unhide', p),
+  // first-run Setup wizard (renderer/setup.js): has this machine finished setup, and what is in the
+  // registry right now; setupDone() stamps settings.json so the wizard stops opening by itself.
+  setupState: () => ipcRenderer.invoke('setup:state'),
+  setupDone: () => ipcRenderer.invoke('setup:done'),
   // lead launch: builds the per-project system prompt file (rules + local additions + project context)
   leadPrepare: (p, name) => ipcRenderer.invoke('lead:prepare', { path: p, name }),
   ptyCreate: (opts) => ipcRenderer.invoke('pty:create', opts),
