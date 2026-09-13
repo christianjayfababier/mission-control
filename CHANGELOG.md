@@ -8,6 +8,8 @@ installed copies pick it up from `latest.yml` in that release within four hours.
 
 ## [Unreleased]
 
+## 0.3.0 - 2026-09-13
+
 ### Added
 
 - A copy started from the checkout now says so: a muted **dev · <version>** chip in the project header and
